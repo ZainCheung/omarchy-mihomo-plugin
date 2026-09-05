@@ -26,7 +26,8 @@ Panel {
   readonly property bool connected: svc ? svc.connected : false
   readonly property string modeLabel: svc ? svc.modeLabel : "--"
 
-  readonly property var currentPage: page === "proxies" ? proxiesPage
+  readonly property var currentPage: page === "profiles" ? profilesPage
+    : page === "proxies" ? proxiesPage
     : page === "config" ? configPage
     : page === "connections" ? connectionsPage
     : page === "rules" ? rulesPage
@@ -41,7 +42,7 @@ Panel {
   }
 
   function cyclePage(direction) {
-    var order = ["home", "proxies", "config", "connections", "rules"]
+    var order = ["home", "profiles", "proxies", "config", "connections", "rules"]
     var index = order.indexOf(page)
     if (index < 0) index = 0
     page = order[(index + direction + order.length) % order.length]
@@ -84,7 +85,12 @@ Panel {
         mode: root.svc.mode,
         version: root.svc.version,
         endpoint: root.svc.endpointTarget,
-        page: root.page
+        page: root.page,
+        activeProfile: root.svc.activeProfile,
+        configPath: root.svc.configPath,
+        configSize: root.svc.configSize,
+        configMtime: root.svc.configMtime,
+        nodeCount: root.svc.nodeCount
       })
     }
   }
@@ -176,10 +182,11 @@ Panel {
       }
       onTextKey: function(text) {
         if (text === "1") root.goto("home")
-        else if (text === "2") root.goto("proxies")
-        else if (text === "3") root.goto("config")
-        else if (text === "4") root.goto("connections")
-        else if (text === "5") root.goto("rules")
+        else if (text === "2") root.goto("profiles")
+        else if (text === "3") root.goto("proxies")
+        else if (text === "4") root.goto("config")
+        else if (text === "5") root.goto("connections")
+        else if (text === "6") root.goto("rules")
         else if (text === "r" && root.svc) root.svc.refreshPage()
         else if (text === "/" && root.currentPage
                  && typeof root.currentPage.focusFilter === "function")
@@ -255,6 +262,7 @@ Panel {
           }
 
           NavButton { width: parent.width; pageId: "home";        glyph: "󰋜"; title: root.svc ? root.svc.t("navHome") : "Home" }
+          NavButton { width: parent.width; pageId: "profiles";    glyph: "󰈙"; title: root.svc ? root.svc.t("navProfiles") : "Profiles" }
           NavButton { width: parent.width; pageId: "proxies";     glyph: "󰖟"; title: root.svc ? root.svc.t("navProxies") : "Proxies" }
           NavButton { width: parent.width; pageId: "config";      glyph: "󰈙"; title: root.svc ? root.svc.t("navConfig") : "Config" }
           NavButton { width: parent.width; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
@@ -316,6 +324,15 @@ Panel {
           id: homePage
           anchors.fill: parent
           visible: root.page === "home"
+          svc: root.svc
+          fg: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        ProfilesPage {
+          id: profilesPage
+          anchors.fill: parent
+          visible: root.page === "profiles"
           svc: root.svc
           fg: root.fg
           fontFamily: root.fontFamily

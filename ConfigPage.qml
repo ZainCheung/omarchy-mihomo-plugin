@@ -12,6 +12,14 @@ Item {
   property color fg: Color.popups.text
   property string fontFamily: Style.font.family
 
+  ProfileDetail {
+    id: detail
+    svc: root.svc
+    profileId: ""
+    foreground: root.fg
+    fontFamily: root.fontFamily
+  }
+
   function fmtUpdated(stamp) {
     var text = String(stamp || "")
     if (text === "" || text.indexOf("0001-01-01") === 0)
@@ -132,6 +140,15 @@ Item {
           text: root.svc ? root.svc.t("configFile") : "Config file"
           foreground: root.fg
           fontFamily: root.fontFamily
+        }
+
+        InfoRow {
+          width: parent.width
+          label: root.svc ? root.svc.t("activeProfile") : "Active profile"
+          value: root.svc && root.svc.activeProfile !== "" ? root.svc.activeProfile : (root.svc ? root.svc.t("rawConfigMode") : "Raw Config Mode")
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          valueBold: true
         }
 
         InfoRow {
@@ -267,6 +284,72 @@ Item {
           }
           foreground: root.fg
           fontFamily: root.fontFamily
+        }
+      }
+
+      Card {
+        width: parent.width
+        foreground: root.fg
+        visible: root.svc && root.svc.managerInstalled
+
+        PanelSectionHeader {
+          text: root.svc ? root.svc.t("networkManagement") : "Network management"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+        Row {
+          width: parent.width
+          spacing: Style.space(12)
+          PlainTextDropdown {
+            width: (parent.width - Style.space(12)) / 2
+            label: root.svc ? root.svc.t("dnsManagement") : "DNS"
+            options: [{label: root.svc ? root.svc.t("managed") : "Managed", value: "managed"}, {label: root.svc ? root.svc.t("inherit") : "Inherit", value: "inherit"}]
+            value: root.svc && root.svc.managerSettings.dnsManagement ? root.svc.managerSettings.dnsManagement : "managed"
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            enabled: !root.svc.managerSettingsMutating
+            onChanged: root.svc.setManagerSetting("dns-management", value)
+          }
+          PlainTextDropdown {
+            width: (parent.width - Style.space(12)) / 2
+            label: root.svc ? root.svc.t("tunManagement") : "TUN"
+            options: [{label: root.svc ? root.svc.t("managed") : "Managed", value: "managed"}, {label: root.svc ? root.svc.t("inherit") : "Inherit", value: "inherit"}]
+            value: root.svc && root.svc.managerSettings.tunManagement ? root.svc.managerSettings.tunManagement : "managed"
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            enabled: !root.svc.managerSettingsMutating
+            onChanged: root.svc.setManagerSetting("tun-management", value)
+          }
+        }
+        Row {
+          spacing: Style.space(8)
+          Button {
+            text: root.svc ? root.svc.t("recompileReload") : "Recompile & Reload"
+            enabled: root.svc && root.svc.activeProfile !== "" && !root.svc.profileMutating && !root.svc.managerSettingsMutating
+            onClicked: root.svc.recompileActiveProfile()
+          }
+          Button {
+            text: root.svc ? root.svc.t("viewOverride") : "View Override"
+            enabled: root.svc && root.svc.activeProfile !== ""
+            onClicked: {
+              detail.profileId = root.svc.activeProfile
+              detail.globalScope = false
+              detail.showRuntime = false
+              detail.showOverride = true
+              detail.open()
+            }
+          }
+          Button {
+            text: root.svc ? root.svc.t("globalOverride") : "Global Override"
+            enabled: root.svc && root.svc.managerInstalled
+            onClicked: {
+              detail.profileId = ""
+              detail.globalScope = true
+              detail.showRuntime = false
+              detail.showOverride = false
+              detail.open()
+            }
+          }
         }
       }
 

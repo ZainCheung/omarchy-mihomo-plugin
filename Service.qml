@@ -30,12 +30,48 @@ Item {
     ? String(manifest.__sourceDir)
     : Quickshell.env("HOME") + "/.config/omarchy/plugins/io.github.lijiawei0305-pixel.mihomo"
   readonly property string runner: pluginDir + "/bin/mihomo-ctl"
+  readonly property string managerRunner: pluginDir + "/bin/mihomo-manager"
+
+  // Profile operations have their own queue. Subscription requests can take up
+  // to 30 seconds and must never block node/mode/system-proxy actions.
+  property var profiles: []
+  property string activeProfile: ""
+  property bool profileLoading: false
+  property bool profileMutating: false
+  property string profileError: ""
+  property string managerFailureMessage: ""
+  property bool managerInstalled: false
+  property bool managerChecking: false
+  property bool managerInstalling: false
+  property var managerSettings: ({})
+  property bool managerSettingsLoading: false
+  property bool managerSettingsMutating: false
+  property string profileSourceId: ""
+  property string profileSourceText: ""
+  property var profileSourceCallback: null
+  property string profileURL: ""
+  property var profileURLCallback: null
+  property string profileURLRequestId: ""
+  property int profileURLRequestSerial: 0
+  property bool profileURLLoading: false
+  property string profileRuntimeText: ""
+  property bool profileRuntimeLoading: false
+  property var profileRuntimeCallback: null
+  property string profileOverrideText: ""
+  property bool profileOverrideLoading: false
+  property var profileOverrideCallback: null
+  property string globalOverrideText: ""
+  property bool globalOverrideLoading: false
+  property var globalOverrideCallback: null
+  property bool profileSourceLoading: false
 
   // Set by the panel. Drives poll cadence and the streaming subscriptions.
   property bool active: false
   property string page: "home"
 
   property bool connected: false
+  property bool hadConnection: false
+  property bool managerReconcilePending: false
   property string lastError: ""
   property string version: ""
   property string endpointTarget: ""
@@ -269,6 +305,175 @@ Item {
     return fmtBytes(bytes) + "/s"
   }
 
+  function applyProfiles(raw) {
+    profileLoading = false
+    try {
+      var data = JSON.parse(raw)
+      if (!data.ok) { profileError = String(data.error || t("actionFailed")); return }
+      var payload = data.data
+      if (payload && payload.profiles !== undefined) {
+        profiles = payload.profiles
+        activeProfile = String(payload.activeProfile || "")
+        syncManagedConfigInfo()
+      } else if (Array.isArray(payload)) {
+        profiles = payload
+      }
+      profileError = ""
+    } catch (e) {
+      profileError = t("parseError")
+    }
+  }
+
+  function refreshProfiles() {
+    if (!ready || !managerInstalled || profileProc.running) return
+    profileLoading = true
+    profileProc.command = ["/usr/bin/bash", managerRunner, "status"]
+    profileProc.running = true
+  }
+
+  function refreshManagerSettings() {
+    if (!ready || !managerInstalled || managerSettingsProc.running) return
+    managerSettingsLoading = true
+    managerSettingsProc.running = true
+  }
+
+  function setManagerSetting(key, value) {
+    if (!managerInstalled || !key || value === undefined || value === null) return
+    managerSettingsMutating = true
+    enqueueManager(["settings", "set", key, String(value)])
+  }
+
+  function reconcileProfiles() {
+    if (!ready || !managerInstalled || managerReconcilePending) return
+    // Reconcile is a manager mutation: serialize it with profile updates and
+    // selections so a core restart cannot race a queued subscription apply.
+    managerReconcilePending = true
+    enqueueManager(["reconcile"])
+    if (managerCurrentAction.length === 0 && managerActionQueue.length === 0)
+      managerReconcilePending = false
+  }
+
+  function enqueueManager(args) {
+    if (!ready || !managerInstalled) return
+    var key = JSON.stringify(args)
+    if (managerCurrentAction.length > 0 && JSON.stringify(managerCurrentAction) === key) return
+    for (var i = 0; i < managerActionQueue.length; i++) {
+      if (JSON.stringify(managerActionQueue[i]) === key) return
+    }
+    var queue = managerActionQueue.slice()
+    queue.push(args)
+    managerActionQueue = queue
+    runNextManagerAction()
+  }
+
+  function markManagerFailure(raw) {
+    var message = root.actionErrorMessage(raw)
+    root.profileError = message !== "" ? message : root.t("actionFailed")
+  }
+
+  function runNextManagerAction() {
+    if (managerProc.running || managerActionQueue.length === 0) return
+    var queue = managerActionQueue.slice()
+    var args = queue.shift()
+    managerActionQueue = queue
+    managerCurrentAction = args
+    managerFailureMessage = ""
+    managerOutput = ""
+    profileMutating = true
+    notice = t("profileActionInProgress")
+    managerProc.command = ["/usr/bin/bash", managerRunner].concat(args)
+    managerProc.running = true
+  }
+
+  function installManager() {
+    if (!ready || managerInstalling || installProc.running) return
+    managerInstalling = true
+    installProc.running = true
+  }
+
+  function importCurrent(name) {
+    enqueueManager(["profile", "import-current", "--name", name || "Local Config"])
+  }
+
+  function addProfile(url, name, intervalSec) {
+    var interval = intervalSec === undefined ? 21600 : Number(intervalSec)
+    enqueueManager(["profile", "add", "--url", url, "--name", name,
+                    "--update-interval", String(interval)])
+  }
+  function selectProfile(id) { enqueueManager(["profile", "select", id]) }
+  function updateProfile(id, viaProxy) {
+    var args = ["profile", "update", id]
+    if (viaProxy) args.push("--via-proxy")
+    enqueueManager(args)
+  }
+  function updateProfileViaProxy(id) { updateProfile(id, true) }
+  function deleteProfile(id) { enqueueManager(["profile", "delete", id]) }
+  function renameProfile(id, name) { enqueueManager(["profile", "rename", id, name]) }
+  function setProfileURL(id, url) { enqueueManager(["profile", "set-url", id, url]) }
+  function readProfileSource(id, callback) {
+    if (!ready || !managerInstalled || sourceProc.running) return
+    profileSourceId = id
+    profileSourceText = ""
+    profileSourceCallback = callback
+    profileSourceLoading = true
+    sourceProc.command = ["/usr/bin/bash", managerRunner, "profile", "source", id]
+    sourceProc.running = true
+  }
+
+  function readProfileURL(id, callback) {
+    if (!ready || !managerInstalled || urlProc.running) return
+    profileURL = ""
+    profileURLRequestSerial += 1
+    profileURLRequestId = id + ":" + String(profileURLRequestSerial)
+    profileURLCallback = callback
+    profileURLLoading = true
+    urlProc.command = ["/usr/bin/bash", managerRunner, "profile", "url", id]
+    urlProc.running = true
+  }
+
+  function readProfileRuntime(id, callback) {
+    if (!ready || !managerInstalled || runtimeProc.running) return
+    profileRuntimeLoading = true
+    profileRuntimeCallback = callback
+    runtimeProc.command = ["/usr/bin/bash", managerRunner, "profile", "runtime", id]
+    runtimeProc.running = true
+  }
+
+  function readProfileOverride(id, callback) {
+    if (!ready || !managerInstalled || overrideProc.running) return
+    profileOverrideLoading = true
+    profileOverrideCallback = callback
+    overrideProc.command = ["/usr/bin/bash", managerRunner, "profile", "override", id]
+    overrideProc.running = true
+  }
+
+  function readGlobalOverride(callback) {
+    if (!ready || !managerInstalled || globalOverrideProc.running) return
+    globalOverrideText = ""
+    globalOverrideLoading = true
+    globalOverrideCallback = callback
+    globalOverrideProc.running = true
+  }
+
+  function openGlobalOverride() {
+    if (!ready || !managerInstalled || overrideOpenProc.running) return
+    overrideOpenProc.command = ["/usr/bin/bash", managerRunner, "override", "open-global"]
+    overrideOpenProc.running = true
+  }
+
+  function openProfileOverride(id) {
+    if (!ready || !managerInstalled || overrideOpenProc.running || !id) return
+    overrideOpenProc.command = ["/usr/bin/bash", managerRunner, "override", "open-profile", id]
+    overrideOpenProc.running = true
+  }
+
+  // Recompile/apply is intentionally kept on the manager queue. It must not
+  // race a subscription update or a profile selection.
+  function recompileActiveProfile() {
+    if (!managerInstalled || activeProfile === "") return
+    enqueueManager(["config", "apply", activeProfile])
+  }
+
   // --- reads ---------------------------------------------------------------
 
   function refresh(forceProxies) {
@@ -315,19 +520,28 @@ Item {
     configInfoProc.running = true
   }
 
+  function markDisconnected(message) {
+    var wasConnected = connected
+    connected = false
+    lastError = message || t("connectFailed")
+    if (wasConnected) {
+      // Preserve the fact that a live connection existed. The next successful
+      // edge is therefore a reconnect and must reconcile the active profile.
+      hadConnection = true
+    }
+  }
+
   function applyCore(raw) {
     var data
     try {
       data = JSON.parse(raw)
     } catch (e) {
-      connected = false
-      lastError = t("parseError")
+      markDisconnected(t("parseError"))
       return
     }
 
     if (data.error) {
-      connected = false
-      lastError = String(data.error)
+      markDisconnected(String(data.error))
       return
     }
 
@@ -539,6 +753,9 @@ Item {
   // One queue, one process. Mutations are cheap and ordering matters (a mode
   // switch followed by a node switch must not race), so they run serially.
   property var actionQueue: []
+  property var managerActionQueue: []
+  property var managerCurrentAction: []
+  property string managerOutput: ""
 
   function enqueue(args, note, kind) {
     var queue = actionQueue.slice()
@@ -617,13 +834,17 @@ Item {
 
   function setTun(enabled) {
     if (!ready) return
+    if (activeProfile !== "") {
+      notice = t("managedProfileHint")
+      return
+    }
     tunEnabled = enabled
     var tun = {
       enable: enabled,
       "auto-route": true,
       "auto-detect-interface": true
     }
-    tun.stack = tunStack !== "" ? tunStack : "mixed"
+    tun.stack = tunStack !== "" && tunStack !== "mixed" ? tunStack : "gvisor"
     if (tunDevice !== "") tun.device = tunDevice
     if (tunDnsHijack !== "") tun["dns-hijack"] = tunDnsHijack.split(", ")
     else tun["dns-hijack"] = ["any:53"]
@@ -658,6 +879,10 @@ Item {
       setIfChanged("lastError", String(data.error))
       return
     }
+    if (activeProfile !== "") {
+      syncManagedConfigInfo()
+      return
+    }
     setIfChanged("configPath", String(data.path || ""))
     setIfChanged("configSize", Number(data.size || 0))
     setIfChanged("configMtime", Number(data.mtime || 0))
@@ -665,6 +890,7 @@ Item {
     setIfChanged("dnsListen", String(data.dnsListen || ""))
     setIfChanged("dnsMode", String(data.dnsMode || ""))
     setIfChanged("dnsFakeIp", String(data.dnsFakeIp || ""))
+    syncManagedConfigInfo()
   }
 
   function actionErrorMessage(raw) {
@@ -677,11 +903,24 @@ Item {
     } catch (e) {
       return text
     }
-    return ""
+    return text
+  }
+
+  function syncManagedConfigInfo() {
+    if (!managerInstalled || activeProfile === "") return
+    if (managerRuntimeInfoProc.running) return
+    managerRuntimeInfoProc.command = ["/usr/bin/bash", managerRunner,
+                                      "profile", "runtime", activeProfile]
+    managerRuntimeInfoProc.running = true
   }
 
   function reloadConfig() {
     if (!ready || configReloading) return
+    if (activeProfile !== "") {
+      configReloading = true
+      enqueueManager(["config", "apply", activeProfile])
+      return
+    }
     if (configPath === "") {
       notice = t("noConfigPath")
       return
@@ -767,10 +1006,19 @@ Item {
 
   // --- lifecycle -----------------------------------------------------------
 
+  onConnectedChanged: {
+    if (!connected) return
+    var wasConnected = hadConnection
+    hadConnection = true
+    if (wasConnected) reconcileProfiles()
+  }
+
   onReadyChanged: {
     if (!ready) return
     endpointProc.running = true
     langProc.running = true
+    managerChecking = true
+    profileCheckProc.running = true
     refresh(true)
   }
 
@@ -783,6 +1031,20 @@ Item {
 
   onPageChanged: {
     if (active) refreshPage()
+  }
+
+  // A light background tick keeps inactive subscriptions fresh without tying
+  // it to the visible-page core poll cadence.
+  Timer {
+    interval: 15 * 60 * 1000
+    running: root.ready && root.managerInstalled
+    repeat: true
+    onTriggered: root.updateDue()
+  }
+
+  function updateDue() {
+    if (!managerInstalled || managerActionQueue.length > 0) return
+    enqueueManager(["profile", "update-due"])
   }
 
   Timer {
@@ -799,6 +1061,248 @@ Item {
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refreshConnections()
+  }
+
+  Process {
+    id: installProc
+    command: ["/usr/bin/bash", root.pluginDir + "/bin/install-manager"]
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: {
+      root.managerInstalling = false
+      root.managerChecking = true
+      profileCheckProc.running = true
+    }
+  }
+
+  Process {
+    id: profileCheckProc
+    command: ["/usr/bin/bash", root.managerRunner, "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var data = JSON.parse(text)
+          root.managerInstalled = data.ok === true
+          if (root.managerInstalled) {
+            root.applyProfiles(text)
+            root.refreshManagerSettings()
+            if (root.connected && root.hadConnection) root.reconcileProfiles()
+          }
+        } catch (e) {
+          root.managerInstalled = false
+        }
+      }
+    }
+    onExited: {
+      root.managerChecking = false
+      if (exitCode !== 0) root.managerInstalled = false
+      else if (root.managerInstalled) root.refreshManagerSettings()
+    }
+  }
+
+  Process {
+    id: managerSettingsProc
+    command: ["/usr/bin/bash", root.managerRunner, "settings", "get"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.managerSettingsLoading = false
+        try {
+          var data = JSON.parse(text)
+          if (data.ok && data.data) root.managerSettings = data.data
+        } catch (e) {}
+      }
+    }
+    onExited: root.managerSettingsLoading = false
+  }
+
+  Process {
+    id: profileProc
+    command: ["/usr/bin/bash", root.managerRunner, "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyProfiles(text)
+    }
+    onExited: root.profileLoading = false
+  }
+
+  Process {
+    id: urlProc
+    command: ["/usr/bin/bash", root.managerRunner, "profile", "url", ""]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var requestId = root.profileURLRequestId
+        root.profileURLLoading = false
+        var value = ""
+        try {
+          var data = JSON.parse(text)
+          value = data.ok ? String(data.url || "") : ""
+        } catch (e) {}
+        if (requestId !== root.profileURLRequestId || requestId === "") return
+        root.profileURL = value
+        root.profileURLRequestId = ""
+        if (root.profileURLCallback) root.profileURLCallback(value)
+        root.profileURLCallback = null
+      }
+    }
+    onExited: {
+      root.profileURLLoading = false
+      if (root.profileURLRequestId !== "") {
+        root.profileURLRequestId = ""
+        root.profileURLCallback = null
+      }
+    }
+  }
+
+  Process {
+    id: globalOverrideProc
+    command: ["/usr/bin/bash", root.managerRunner, "override", "global"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.globalOverrideLoading = false
+        try {
+          var data = JSON.parse(text)
+          root.globalOverrideText = data.ok ? String(data.override || "") : String(data.error || "")
+        } catch (e) { root.globalOverrideText = root.t("parseError") }
+        if (root.globalOverrideCallback) root.globalOverrideCallback(root.globalOverrideText)
+        root.globalOverrideCallback = null
+      }
+    }
+    onExited: {
+      root.globalOverrideLoading = false
+      if (exitCode !== 0) root.globalOverrideCallback = null
+    }
+  }
+
+  Process {
+    id: overrideOpenProc
+    command: ["/usr/bin/bash", root.managerRunner, "override", "open-global"]
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: {
+      if (exitCode === 0) root.refreshManagerSettings()
+      else root.markManagerFailure("")
+    }
+  }
+
+  Process {
+    id: managerRuntimeInfoProc
+    command: ["/usr/bin/bash", root.managerRunner, "profile", "runtime", ""]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (root.activeProfile === "") return
+        try {
+          var data = JSON.parse(text)
+          if (!data.ok) return
+          root.configPath = String(data.path || "")
+          root.configSize = Number(data.size || 0)
+          root.configMtime = Number(data.mtime || 0)
+        } catch (e) {}
+      }
+    }
+  }
+
+  Process {
+    id: runtimeProc
+    command: ["/usr/bin/bash", root.managerRunner, "profile", "runtime", ""]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.profileRuntimeLoading = false
+        try {
+          var data = JSON.parse(text)
+          root.profileRuntimeText = data.ok ? String(data.runtime || "") : String(data.error || "")
+        } catch (e) { root.profileRuntimeText = root.t("parseError") }
+        if (root.profileRuntimeCallback) root.profileRuntimeCallback(root.profileRuntimeText)
+        root.profileRuntimeCallback = null
+      }
+    }
+    onExited: {
+      root.profileRuntimeLoading = false
+      if (exitCode !== 0) root.profileRuntimeCallback = null
+    }
+  }
+
+  Process {
+    id: overrideProc
+    command: ["/usr/bin/bash", root.managerRunner, "profile", "override", ""]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.profileOverrideLoading = false
+        try {
+          var data = JSON.parse(text)
+          root.profileOverrideText = data.ok ? String(data.override || "") : String(data.error || "")
+        } catch (e) { root.profileOverrideText = root.t("parseError") }
+        if (root.profileOverrideCallback) root.profileOverrideCallback(root.profileOverrideText)
+        root.profileOverrideCallback = null
+      }
+    }
+    onExited: {
+      root.profileOverrideLoading = false
+      if (exitCode !== 0) root.profileOverrideCallback = null
+    }
+  }
+
+  Process {
+    id: sourceProc
+    command: ["/usr/bin/bash", root.managerRunner, "profile", "source", ""]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.profileSourceLoading = false
+        try {
+          var data = JSON.parse(text)
+          root.profileSourceText = data.ok ? String(data.source || "") : String(data.error || "")
+          if (root.profileSourceCallback) root.profileSourceCallback(root.profileSourceText)
+          root.profileSourceCallback = null
+        } catch (e) {
+          root.profileSourceText = root.t("parseError")
+          if (root.profileSourceCallback) root.profileSourceCallback(root.profileSourceText)
+          root.profileSourceCallback = null
+        }
+      }
+    }
+    onExited: {
+      root.profileSourceLoading = false
+      if (exitCode !== 0) root.profileSourceCallback = null
+    }
+  }
+
+  Process {
+    id: managerProc
+    command: ["/usr/bin/bash", root.managerRunner, "status"]
+    stdout: StdioCollector {
+      id: managerOut
+      waitForEnd: true
+      onStreamFinished: root.managerOutput = text
+    }
+    onExited: function(exitCode) {
+      var finishedAction = root.managerCurrentAction.slice()
+      var output = root.managerOutput !== "" ? root.managerOutput : managerOut.text
+      var failure = exitCode !== 0 ? root.actionErrorMessage(output) : ""
+      if (exitCode !== 0) {
+        if (failure === "") failure = root.t("actionFailed")
+        root.managerFailureMessage = failure
+        root.profileError = failure
+        root.notice = failure
+      } else {
+        root.managerFailureMessage = ""
+        root.profileError = ""
+        root.notice = root.t("profileActionCompleted")
+      }
+      root.profileMutating = false
+      if (finishedAction.length > 0 && finishedAction[0] === "settings") root.managerSettingsMutating = false
+      if (finishedAction.length > 0 && finishedAction[0] === "reconcile") root.managerReconcilePending = false
+      if (finishedAction.length > 0 && finishedAction[0] === "config") root.configReloading = false
+      root.managerCurrentAction = []
+      root.runNextManagerAction()
+      root.refreshProfiles()
+      root.refreshManagerSettings()
+      if (finishedAction.length > 0 && finishedAction[0] === "config") root.refreshConfigInfo()
+    }
   }
 
   Process {
@@ -850,8 +1354,7 @@ Item {
     }
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.lastError === "") {
-        root.connected = false
-        root.lastError = root.t("connectFailed")
+        markDisconnected(root.t("connectFailed"))
       }
     }
   }
