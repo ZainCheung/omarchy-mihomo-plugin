@@ -2,7 +2,7 @@
 set -euo pipefail
 # Explicit installer: no profile action downloads software implicitly.
 VERSION="${OMARCHY_MIHOMO_MANAGER_VERSION:-latest}"
-REPO="${OMARCHY_MIHOMO_MANAGER_REPO:-lijiawei0305-pixel/omarchy-mihomo-plugin}"
+REPO="${OMARCHY_MIHOMO_MANAGER_REPO:-ZainCheung/omarchy-mihomo-plugin}"
 arch="$(uname -m)"
 case "$arch" in x86_64|amd64) asset="omarchy-mihomo-manager-linux-amd64";; aarch64|arm64) asset="omarchy-mihomo-manager-linux-arm64";; *) echo "unsupported architecture: $arch" >&2; exit 1;; esac
 if [[ "$VERSION" == "latest" ]]; then

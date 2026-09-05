@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/config"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/core"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/doctor"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/fetcher"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/profile"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/store"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/validator"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/config"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/core"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/doctor"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/fetcher"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/store"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/validator"
 )
 
 var st = store.New()
@@ -170,6 +170,8 @@ func profileCommand(args []string) {
 		addProfile(args[1:])
 	case "import-current":
 		importCurrent(args[1:])
+	case "import":
+		importFile(args[1:])
 	case "rename":
 		requireID(args)
 		if len(args) < 3 {
@@ -190,7 +192,7 @@ func profileCommand(args []string) {
 		}
 		rawURL := strings.TrimSpace(args[2])
 		parsed, parseErr := url.Parse(rawURL)
-		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || strings.TrimSpace(parsed.Hostname()) == "" {
 			fail("args", fmt.Errorf("profile URL must be HTTP or HTTPS"))
 		}
 		if err := runLocked(func() error {
@@ -326,6 +328,7 @@ func addProfile(args []string) {
 		fail("store", err)
 	}
 	meta := profile.TouchSuccess(profile.Meta{ID: id, Name: strings.TrimSpace(*name), Type: "remote", URL: *rawURL, UpdateIntervalSec: *interval}, result.ETag, result.LastModified)
+	setSubscriptionInfo(&meta, result)
 	err = runLocked(func() error {
 		if err := profile.Add(st, meta, result.Body, []byte("{}\n")); err != nil {
 			return err
@@ -362,6 +365,53 @@ func importCurrent(args []string) {
 		fail("coreinfo", fmt.Errorf("running config path unavailable"))
 	}
 	source, err := os.ReadFile(info.ConfigPath)
+	if err != nil {
+		fail("read", err)
+	}
+	if _, err = config.Parse(source); err != nil {
+		fail("parse", err)
+	}
+	if err = validateCompiled(source, []byte("{}\n")); err != nil {
+		fail("validate", err)
+	}
+	id, err := store.RandomID()
+	if err != nil {
+		fail("store", err)
+	}
+	meta := profile.Meta{ID: id, Name: strings.TrimSpace(*name), Type: "local"}
+	err = runLocked(func() error {
+		if err := profile.Add(st, meta, source, []byte("{}\n")); err != nil {
+			return err
+		}
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			_ = profile.Delete(st, id)
+			return err
+		}
+		idx.Profiles = append(idx.Profiles, id)
+		if err = profile.SaveIndex(st, idx); err != nil {
+			_ = profile.Delete(st, id)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		fail("store", err)
+	}
+	ok(publicMeta(meta))
+}
+
+func importFile(args []string) {
+	fs := flag.NewFlagSet("import", flag.ContinueOnError)
+	path := fs.String("file", "", "local YAML file")
+	name := fs.String("name", "Local Config", "profile name")
+	if err := fs.Parse(args); err != nil {
+		fail("args", err)
+	}
+	if strings.TrimSpace(*path) == "" || strings.TrimSpace(*name) == "" {
+		fail("args", fmt.Errorf("--file and --name are required"))
+	}
+	source, err := os.ReadFile(*path)
 	if err != nil {
 		fail("read", err)
 	}
@@ -561,7 +611,9 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 			if lastModified == "" {
 				lastModified = current.LastModified
 			}
-			return profile.SaveMeta(st, profile.TouchSuccess(current, etag, lastModified))
+			next := profile.TouchSuccess(current, etag, lastModified)
+			setSubscriptionInfo(&next, result)
+			return profile.SaveMeta(st, next)
 		})
 		if err != nil {
 			return nil, operationFailure{"store", err}
@@ -596,10 +648,26 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 			return operationFailure{"store", fmt.Errorf("profile changed during update; retry")}
 		}
 		newMeta = profile.TouchSuccess(currentMeta, result.ETag, result.LastModified)
+		setSubscriptionInfo(&newMeta, result)
 		active = idx.ActiveProfile == id
 		oldSource, readErr := profile.ReadSource(st, id)
 		if readErr != nil {
 			return operationFailure{"store", readErr}
+		}
+		if !active {
+			candidate, compileErr := compile(id, result.Body)
+			if compileErr != nil {
+				if saveErr := profile.SaveMeta(st, profile.SetError(currentMeta, compileErr)); saveErr != nil {
+					return operationFailure{"rollback", rollbackErrors(compileErr, saveErr)}
+				}
+				return operationFailure{"compile", compileErr}
+			}
+			if validateErr := validateCandidate(candidate); validateErr != nil {
+				if saveErr := profile.SaveMeta(st, profile.SetError(currentMeta, validateErr)); saveErr != nil {
+					return operationFailure{"rollback", rollbackErrors(validateErr, saveErr)}
+				}
+				return operationFailure{"validate", validateErr}
+			}
 		}
 		if active {
 			oldState, hadState, stateErr := snapshot(st.StatePath())
@@ -610,7 +678,8 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 			if runtimeSnapshotErr != nil {
 				return operationFailure{"store", runtimeSnapshotErr}
 			}
-			if applyErr := applyLocked(id, meta, result.Body); applyErr != nil {
+			if applyErr := applyLocked(id, currentMeta, result.Body); applyErr != nil {
+				_ = profile.SaveMeta(st, profile.SetError(currentMeta, applyErr))
 				return operationFailure{"apply", applyErr}
 			}
 			if writeErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), result.Body); writeErr != nil {
@@ -644,6 +713,18 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"id": id, "updated": true, "active": active}, nil
+}
+
+func setSubscriptionInfo(meta *profile.Meta, result fetcher.Result) {
+	if meta == nil || !result.HasSubscriptionInfo {
+		return
+	}
+	meta.SubscriptionInfo = profile.SubscriptionInfo{
+		Upload:   result.SubscriptionInfo.Upload,
+		Download: result.SubscriptionInfo.Download,
+		Total:    result.SubscriptionInfo.Total,
+		Expire:   result.SubscriptionInfo.Expire,
+	}
 }
 
 func snapshotRuntime() (runtimeSnapshot, error) {
@@ -795,28 +876,62 @@ func compile(id string, source []byte) ([]byte, error) {
 	}
 	return compileBytes(source, global, override)
 }
+
+func loadRuntimeState() (store.RuntimeState, bool, error) {
+	var state store.RuntimeState
+	b, err := os.ReadFile(st.StatePath())
+	if os.IsNotExist(err) {
+		return state, false, nil
+	}
+	if err != nil {
+		return state, false, err
+	}
+	if err := json.Unmarshal(b, &state); err != nil {
+		return state, true, err
+	}
+	return state, true, nil
+}
+
+// protectedController returns the last known controller fields. A nil map
+// means there was no running core to inspect; an empty non-nil map means the
+// running config was inspected and contained none of those fields.
+func protectedController() (map[string]any, error) {
+	state, exists, err := loadRuntimeState()
+	if err != nil {
+		return nil, err
+	}
+	info, err := core.CoreInfo()
+	if err == nil && info.ConfigPath != "" {
+		protected, readErr := config.ReadProtected(info.ConfigPath)
+		if readErr == nil {
+			return protected, nil
+		}
+		if !exists || state.Protected == nil {
+			return nil, fmt.Errorf("read running config for protected fields: %w", readErr)
+		}
+	}
+	if exists && state.Protected != nil {
+		return state.Protected, nil
+	}
+	// A stopped core has no live controller snapshot. Preserve source fields
+	// until the first apply can capture them; an unavailable config file should
+	// not make adding a profile impossible.
+	return nil, nil
+}
+
 func compileBytes(source, global, override []byte) ([]byte, error) {
 	settings, err := profile.LoadSettings(st)
 	if err != nil {
 		return nil, err
 	}
-	protected := map[string]any{}
-	info, infoErr := core.CoreInfo()
-	if infoErr == nil && info.ConfigPath != "" {
-		protected, err = config.ReadProtected(info.ConfigPath)
-		if err != nil {
-			return nil, err
-		}
+	protected, err := protectedController()
+	if err != nil {
+		return nil, err
 	}
-	// Adding a profile validates the source before a running core is required;
-	// an existing core is still mandatory for select/apply/reconcile.
 	return (config.Compiler{Settings: settings, Protected: protected}).Compile(source, global, override)
 }
-func validateCompiled(source, override []byte) error {
-	b, err := compileBytes(source, nil, override)
-	if err != nil {
-		return err
-	}
+
+func validateCandidate(b []byte) error {
 	f, err := os.CreateTemp(st.RuntimeDir(), ".validate-*.yaml")
 	if err != nil {
 		return err
@@ -826,19 +941,24 @@ func validateCompiled(source, override []byte) error {
 	if err = f.Chmod(0600); err == nil {
 		_, err = f.Write(b)
 	}
+	if err == nil {
+		err = f.Sync()
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
-	if err == nil {
-		binary := core.Binary()
-		// A profile may be added while the core is stopped. Parse and compile
-		// still protect the store in that case; apply/reconcile perform the
-		// mandatory Mihomo validation once a core/binary is available.
-		if binary != "" {
-			err = validator.Validate(binary, path)
-		}
+	if err != nil {
+		return err
 	}
-	return err
+	return validator.Validate(core.Binary(), path)
+}
+
+func validateCompiled(source, override []byte) error {
+	b, err := compileBytes(source, nil, override)
+	if err != nil {
+		return err
+	}
+	return validateCandidate(b)
 }
 
 func applyLocked(id string, meta profile.Meta, source []byte) error {
@@ -886,7 +1006,21 @@ func applyLocked(id string, meta profile.Meta, source []byte) error {
 	if err = st.WriteAtomic(st.CurrentPath(), b); err != nil {
 		return restore(fmt.Errorf("promote runtime: %w", err))
 	}
-	if err = st.SaveRuntimeState(store.RuntimeState{ActiveProfile: id, LastAppliedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+	protected, protectedErr := protectedController()
+	if protectedErr != nil {
+		return restore(fmt.Errorf("capture protected controller: %w", protectedErr))
+	}
+	state, _, stateErr := loadRuntimeState()
+	if stateErr != nil {
+		return restore(fmt.Errorf("load runtime state: %w", stateErr))
+	}
+	state.PreviousProfile = state.ActiveProfile
+	state.ActiveProfile = id
+	state.LastAppliedAt = time.Now().UTC().Format(time.RFC3339)
+	if protected != nil {
+		state.Protected = protected
+	}
+	if err = st.SaveRuntimeState(state); err != nil {
 		return restore(fmt.Errorf("save runtime state: %w", err))
 	}
 	return nil
@@ -927,23 +1061,82 @@ func backupRuntime() error {
 }
 func applyPrevious() error { return core.Apply(st.PreviousPath()) }
 func rollback() {
+	active := ""
 	err := runLocked(func() error {
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			return err
+		}
+		oldIndex := idx
+		oldState, hadState, err := snapshot(st.StatePath())
+		if err != nil {
+			return err
+		}
+		oldRuntime, err := snapshotRuntime()
+		if err != nil {
+			return err
+		}
+		state, _, err := loadRuntimeState()
+		if err != nil {
+			return err
+		}
+		restore := func(primary error) error {
+			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{})
+			indexErr := profile.SaveIndex(st, oldIndex)
+			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+			if runtimeErr != nil || indexErr != nil || stateErr != nil {
+				return rollbackErrors(primary, runtimeErr, indexErr, stateErr)
+			}
+			return primary
+		}
+
 		if err := validator.Validate(core.Binary(), st.PreviousPath()); err != nil {
 			return fmt.Errorf("validate: %w", err)
 		}
 		if err := applyPrevious(); err != nil {
-			return fmt.Errorf("apply: %w", err)
+			return restore(fmt.Errorf("apply: %w", err))
 		}
-		b, err := os.ReadFile(st.PreviousPath())
+		previous, err := os.ReadFile(st.PreviousPath())
 		if err != nil {
-			return err
+			return restore(err)
 		}
-		return st.WriteAtomic(st.CurrentPath(), b)
+		if err = st.WriteAtomic(st.CurrentPath(), previous); err != nil {
+			return restore(fmt.Errorf("promote rollback: %w", err))
+		}
+		// A rollback swaps the two runtime generations. Keeping the old current
+		// config as previous makes a second rollback coherent with the profile
+		// index and preserves a useful recovery point.
+		if oldRuntime.current.existed {
+			if err = st.WriteAtomic(st.PreviousPath(), oldRuntime.current.data); err != nil {
+				return restore(fmt.Errorf("swap rollback backup: %w", err))
+			}
+		} else if err = os.Remove(st.PreviousPath()); err != nil && !os.IsNotExist(err) {
+			return restore(fmt.Errorf("remove rollback backup: %w", err))
+		}
+
+		previousProfile := state.PreviousProfile
+		if !store.ValidID(previousProfile) {
+			previousProfile = ""
+		} else if _, err = profile.LoadMeta(st, previousProfile); err != nil {
+			previousProfile = ""
+		}
+		idx.ActiveProfile = previousProfile
+		state.PreviousProfile = oldIndex.ActiveProfile
+		state.ActiveProfile = previousProfile
+		state.LastAppliedAt = time.Now().UTC().Format(time.RFC3339)
+		if err = st.SaveRuntimeState(state); err != nil {
+			return restore(fmt.Errorf("save runtime state: %w", err))
+		}
+		if err = profile.SaveIndex(st, idx); err != nil {
+			return restore(fmt.Errorf("save profile index: %w", err))
+		}
+		active = previousProfile
+		return nil
 	})
 	if err != nil {
 		fail("rollback", err)
 	}
-	ok(map[string]bool{"rolledBack": true})
+	ok(map[string]any{"rolledBack": true, "activeProfile": active})
 }
 func reconcile() {
 	err := runLocked(func() error {
@@ -1040,31 +1233,29 @@ func settingsCommand(args []string) {
 	if args[0] != "set" || len(args) < 3 {
 		fail("args", fmt.Errorf("settings set key value required"))
 	}
-	old, err := profile.LoadSettings(st)
-	if err != nil {
-		fail("settings", err)
-	}
-	next := old
-	switch args[1] {
-	case "dns-management":
-		next.DNSManagement = args[2]
-	case "tun-management":
-		next.TUNManagement = args[2]
-	default:
-		fail("args", fmt.Errorf("unsupported setting: %s", args[1]))
-	}
-	if next.DNSManagement != "managed" && next.DNSManagement != "inherit" {
-		fail("args", fmt.Errorf("dns-management must be managed or inherit"))
-	}
-	if next.TUNManagement != "managed" && next.TUNManagement != "inherit" {
-		fail("args", fmt.Errorf("tun-management must be managed or inherit"))
-	}
-	idx, err := profile.LoadIndex(st)
-	if err != nil {
-		fail("store", err)
-	}
-	err = runLocked(func() error {
-		if err := profile.SaveSettings(st, next); err != nil {
+	key := args[1]
+	value := strings.Join(args[2:], " ")
+	var next profile.Settings
+	err := runLocked(func() error {
+		old, err := profile.LoadSettings(st)
+		if err != nil {
+			return err
+		}
+		next = old
+		if err = setSetting(&next, key, value); err != nil {
+			return err
+		}
+		if err = validateSettings(next); err != nil {
+			return err
+		}
+		if err = profile.SaveSettings(st, next); err != nil {
+			return err
+		}
+		next.TUN.Stack = profile.NormalizeTUNStack(next.TUN.Stack)
+
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			_ = profile.SaveSettings(st, old)
 			return err
 		}
 		if idx.ActiveProfile == "" {
@@ -1077,7 +1268,7 @@ func settingsCommand(args []string) {
 		}
 		if err = applyLocked(idx.ActiveProfile, meta, nil); err != nil {
 			if restoreErr := profile.SaveSettings(st, old); restoreErr != nil {
-				return fmt.Errorf("%w; settings rollback: %v", err, restoreErr)
+				return rollbackErrors(err, restoreErr)
 			}
 			return err
 		}
@@ -1087,6 +1278,115 @@ func settingsCommand(args []string) {
 		fail("apply", err)
 	}
 	ok(next)
+}
+
+func parseBoolSetting(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "on", "yes", "enabled":
+		return true, nil
+	case "0", "false", "off", "no", "disabled":
+		return false, nil
+	default:
+		return false, fmt.Errorf("boolean setting must be true or false")
+	}
+}
+
+func parseListSetting(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if item := strings.TrimSpace(part); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func setSetting(settings *profile.Settings, key, value string) error {
+	if settings == nil {
+		return fmt.Errorf("settings are unavailable")
+	}
+	switch key {
+	case "dns-management":
+		settings.DNSManagement = strings.ToLower(strings.TrimSpace(value))
+	case "tun-management":
+		settings.TUNManagement = strings.ToLower(strings.TrimSpace(value))
+	case "dns-enable":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("dns-enable: %w", err)
+		}
+		settings.DNS.Enable = v
+	case "dns-ipv6":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("dns-ipv6: %w", err)
+		}
+		settings.DNS.IPv6 = v
+	case "dns-enhanced-mode":
+		settings.DNS.EnhancedMode = strings.ToLower(strings.TrimSpace(value))
+	case "dns-fake-ip-range":
+		settings.DNS.FakeIPRange = strings.TrimSpace(value)
+	case "dns-default-nameserver":
+		settings.DNS.DefaultNameserver = parseListSetting(value)
+	case "dns-nameserver":
+		settings.DNS.Nameserver = parseListSetting(value)
+	case "dns-proxy-server-nameserver":
+		settings.DNS.ProxyServerNameserver = parseListSetting(value)
+	case "dns-fake-ip-filter":
+		settings.DNS.FakeIPFilter = parseListSetting(value)
+	case "tun-enable":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("tun-enable: %w", err)
+		}
+		settings.TUN.Enable = v
+	case "tun-stack":
+		settings.TUN.Stack = profile.NormalizeTUNStack(value)
+	case "tun-auto-route":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("tun-auto-route: %w", err)
+		}
+		settings.TUN.AutoRoute = v
+	case "tun-auto-detect-interface":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("tun-auto-detect-interface: %w", err)
+		}
+		settings.TUN.AutoDetectInterface = v
+	case "tun-strict-route":
+		v, err := parseBoolSetting(value)
+		if err != nil {
+			return fmt.Errorf("tun-strict-route: %w", err)
+		}
+		settings.TUN.StrictRoute = v
+	case "tun-dns-hijack":
+		settings.TUN.DNSHijack = parseListSetting(value)
+	default:
+		return fmt.Errorf("unsupported setting: %s", key)
+	}
+	return nil
+}
+
+func validateSettings(settings profile.Settings) error {
+	if settings.DNSManagement != "managed" && settings.DNSManagement != "inherit" {
+		return fmt.Errorf("dns-management must be managed or inherit")
+	}
+	if settings.TUNManagement != "managed" && settings.TUNManagement != "inherit" {
+		return fmt.Errorf("tun-management must be managed or inherit")
+	}
+	if settings.DNS.EnhancedMode != "fake-ip" && settings.DNS.EnhancedMode != "redir-host" {
+		return fmt.Errorf("dns-enhanced-mode must be fake-ip or redir-host")
+	}
+	stack := profile.NormalizeTUNStack(settings.TUN.Stack)
+	if stack != "system" && stack != "gvisor" {
+		return fmt.Errorf("tun-stack must be system or gvisor")
+	}
+	if strings.TrimSpace(settings.DNS.FakeIPRange) == "" {
+		return fmt.Errorf("dns-fake-ip-range must not be empty")
+	}
+	return nil
 }
 
 func currentActive() string { idx, _ := profile.LoadIndex(st); return idx.ActiveProfile }

@@ -1,6 +1,9 @@
 package fetcher
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestURLIsNotLoggedByFetcherErrors(t *testing.T) {
 	_, err := Fetch("file:///secret/token", "", "", "", false, 0)
@@ -11,4 +14,7 @@ func TestURLIsNotLoggedByFetcherErrors(t *testing.T) {
 		t.Fatalf("unsafe error: %q", got)
 	}
 }
-func containsSecret(s string) bool { return s == "secret" || s == "token" }
+func containsSecret(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "secret") || strings.Contains(lower, "token")
+}

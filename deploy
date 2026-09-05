@@ -55,7 +55,6 @@ rsync -a --delete \
   --exclude 'DEVELOPMENT.md' \
   --exclude 'MIGRATION-PROMPT.md' \
   --exclude 'manager/.cache/' \
-  --exclude 'bin/omarchy-mihomo-manager' \
   "$REPO"/ "$TARGET"/
 
 # Saving under ~/.config/omarchy/plugins/ is supposed to hot-reload, but the

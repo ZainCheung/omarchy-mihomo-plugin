@@ -12,6 +12,7 @@ STORE="$TMP/store"
 FAKE="$TMP/fake"
 mkdir -p "$FAKE/http"
 export OMARCHY_MIHOMO_HOME="$STORE"
+export OMARCHY_MIHOMO_ALLOW_PRIVATE_HOSTS=1
 export FAKE_LIVE_CONFIG="$FAKE/live.yaml"
 export FAKE_CONFIG="$FAKE/config.yaml"
 export FAKE_FAIL_CONFIG_ONCE="$FAKE/fail-config-once"
@@ -91,6 +92,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if tag and self.headers.get("If-None-Match") == tag:
             self.send_response(304)
             self.send_header("ETag", tag)
+            self.send_header("Subscription-Userinfo", "upload=10; download=20; total=100; expire=1700000000")
             self.end_headers()
             return
         body = (root / name).read_bytes()
@@ -98,6 +100,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if tag:
             self.send_header("ETag", tag)
         self.send_header("Content-Type", "text/yaml")
+        self.send_header("Subscription-Userinfo", "upload=10; download=20; total=100; expire=1700000000")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -192,6 +195,7 @@ SECRET_URL="http://127.0.0.1:$PORT/a?token=integration-secret"
 
 A_JSON="$($MANAGER profile add --url "$A_URL" --name A)"
 A_ID="$(printf '%s' "$A_JSON" | get_id)"
+[[ "$A_JSON" == *'"download":20'* ]] || { echo 'subscription quota was not persisted' >&2; exit 1; }
 B_JSON="$($MANAGER profile add --url "$B_URL" --name B)"
 B_ID="$(printf '%s' "$B_JSON" | get_id)"
 ETAG_JSON="$($MANAGER profile add --url "$ETAG_URL" --name ETag)"
@@ -206,8 +210,18 @@ RAW_URL="$($MANAGER profile url "$SECRET_ID")"
 
 $MANAGER profile select "$A_ID" >/dev/null
 assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+assert_file_contains "$STORE/runtime/state.json" '"secret": "test-secret"'
 $MANAGER profile select "$B_ID" >/dev/null
 assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: debug'
+$MANAGER profile select "$A_ID" >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+$MANAGER profile select "$B_ID" >/dev/null
+$MANAGER config rollback >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+assert_file_contains "$STORE/profiles/index.json" "$A_ID"
+$MANAGER config rollback >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: debug'
+assert_file_contains "$STORE/profiles/index.json" "$B_ID"
 $MANAGER profile select "$A_ID" >/dev/null
 assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
 
@@ -219,6 +233,14 @@ assert_file_contains "$STORE/profiles/index.json" "$A_ID"
 fail_cmd profile add --url "http://127.0.0.1:$PORT/bad" --name Bad
 assert_file_contains "$TMP/fail.err" 'parse'
 [[ "$(find "$STORE/profiles" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 4 ]] || { echo 'bad profile was persisted' >&2; exit 1; }
+
+# An inactive update must compile and validate before replacing its source.
+cp "$STORE/profiles/$B_ID/source.yaml" "$TMP/b-before.yaml"
+export FAKE_VALIDATE_FAIL=1
+fail_cmd profile update "$B_ID"
+unset FAKE_VALIDATE_FAIL
+assert_file_contains "$TMP/fail.err" 'simulated Mihomo validation failure'
+cmp "$STORE/profiles/$B_ID/source.yaml" "$TMP/b-before.yaml"
 
 # Conditional request path: the second fetch must be HTTP 304.
 $MANAGER profile update "$ETAG_ID" >/dev/null
@@ -256,6 +278,12 @@ assert_file_contains "$STORE/runtime/state.json" "$A_ID"
 # Settings validation and a successful active apply.
 $MANAGER settings set dns-management inherit >/dev/null
 assert_file_contains "$STORE/settings.json" '"dnsManagement": "inherit"'
+$MANAGER settings set dns-enable false >/dev/null
+assert_file_contains "$STORE/settings.json" '"enable": false'
+$MANAGER settings set tun-stack system >/dev/null
+assert_file_contains "$STORE/settings.json" '"stack": "system"'
+$MANAGER settings set dns-nameserver '1.1.1.1, 8.8.8.8' >/dev/null
+assert_file_contains "$STORE/settings.json" '8.8.8.8'
 fail_cmd settings set tun-management invalid
 assert_file_contains "$TMP/fail.err" 'managed or inherit'
 

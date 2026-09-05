@@ -414,22 +414,66 @@ curl_args() {
 
 request() {
   local method="$1" path="$2" body="${3:-}"
-  local args
+  local args response_file status_file status error
   curl_args args
-  args+=(--max-time "$TIMEOUT" --request "$method")
+  args+=(--max-time "$TIMEOUT" --request "$method"
+         --write-out $'\\n%{http_code}')
   if [[ -n "$body" ]]; then
     args+=(--header "Content-Type: application/json" --data "$body")
   fi
-  curl "${args[@]}" "$(base_url)$path"
+  response_file="$(mktemp)"
+  status_file="$(mktemp)"
+  if ! curl "${args[@]}" "$(base_url)$path" >"$response_file" 2>"$status_file"; then
+    error="$(cat "$status_file")"
+    rm -f "$status_file" "$response_file"
+    [[ -n "$error" ]] || error="controller request failed"
+    fail "$error"
+  fi
+  status="$(tail -n1 "$response_file")"
+  if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+    error="$(cat "$response_file")"
+    rm -f "$status_file" "$response_file"
+    [[ -n "$error" ]] || error="controller returned an invalid response"
+    fail "$error"
+  fi
+  if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+    rm -f "$status_file" "$response_file"
+    fail "controller returned HTTP $status"
+  fi
+  sed '$d' "$response_file"
+  rm -f "$status_file" "$response_file"
 }
 
+# A response body is kept until the status is checked; non-2xx responses never
+# reach JSON consumers.
 request_file() {
   local method="$1" path="$2" file="$3"
-  local args
+  local args response_file status_file status error
   curl_args args
   args+=(--max-time "$TIMEOUT" --request "$method"
-         --header "Content-Type: application/json" --data-binary "@$file")
-  curl "${args[@]}" "$(base_url)$path"
+         --header "Content-Type: application/json" --data-binary "@$file"
+         --write-out $'\\n%{http_code}')
+  response_file="$(mktemp)"
+  status_file="$(mktemp)"
+  if ! curl "${args[@]}" "$(base_url)$path" >"$response_file" 2>"$status_file"; then
+    error="$(cat "$status_file")"
+    rm -f "$status_file" "$response_file"
+    [[ -n "$error" ]] || error="controller request failed"
+    fail "$error"
+  fi
+  status="$(tail -n1 "$response_file")"
+  if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+    error="$(cat "$response_file")"
+    rm -f "$status_file" "$response_file"
+    [[ -n "$error" ]] || error="controller returned an invalid response"
+    fail "$error"
+  fi
+  if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+    rm -f "$status_file" "$response_file"
+    fail "controller returned HTTP $status"
+  fi
+  sed '$d' "$response_file"
+  rm -f "$status_file" "$response_file"
 }
 
 # JSON-safe error envelope so the QML side always has something parseable.

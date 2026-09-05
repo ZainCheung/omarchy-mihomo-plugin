@@ -54,8 +54,12 @@ func (s *Store) CandidatePath() string      { return filepath.Join(s.RuntimeDir(
 func (s *Store) StatePath() string          { return filepath.Join(s.RuntimeDir(), "state.json") }
 
 type RuntimeState struct {
-	ActiveProfile string `json:"activeProfile,omitempty"`
-	LastAppliedAt string `json:"lastAppliedAt,omitempty"`
+	ActiveProfile   string `json:"activeProfile,omitempty"`
+	PreviousProfile string `json:"previousProfile,omitempty"`
+	LastAppliedAt   string `json:"lastAppliedAt,omitempty"`
+	// Protected contains controller fields captured from the running core.
+	// state.json is written with mode 0600 because this may include `secret`.
+	Protected map[string]any `json:"protected,omitempty"`
 }
 
 func (s *Store) SaveRuntimeState(x RuntimeState) error { return s.WriteJSON(s.StatePath(), x) }

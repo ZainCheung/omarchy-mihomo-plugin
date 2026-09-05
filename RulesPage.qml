@@ -54,7 +54,7 @@ Item {
     title: root.svc ? root.svc.t("rulesTitle") : "Rules"
     subtitle: root.svc
       ? (root.filter === ""
-          ? root.svc.t("rulesCount", root.svc.ruleCount)
+          ? root.svc.t(root.svc.ruleCount === 1 ? "rulesCountOne" : "rulesCountMany", root.svc.ruleCount)
           : root.svc.t("rulesFiltered", root.rows.length, root.svc.ruleCount))
       : ""
     foreground: root.fg

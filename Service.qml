@@ -28,7 +28,7 @@ Item {
     && String(manifest.__sourceDir) !== ""
   readonly property string pluginDir: ready
     ? String(manifest.__sourceDir)
-    : Quickshell.env("HOME") + "/.config/omarchy/plugins/io.github.lijiawei0305-pixel.mihomo"
+    : Quickshell.env("HOME") + "/.config/omarchy/plugins/io.github.ZainCheung.mihomo"
   readonly property string runner: pluginDir + "/bin/mihomo-ctl"
   readonly property string managerRunner: pluginDir + "/bin/mihomo-manager"
 
@@ -36,6 +36,7 @@ Item {
   // to 30 seconds and must never block node/mode/system-proxy actions.
   property var profiles: []
   property string activeProfile: ""
+  property string activeProfileName: ""
   property bool profileLoading: false
   property bool profileMutating: false
   property string profileError: ""
@@ -46,6 +47,8 @@ Item {
   property var managerSettings: ({})
   property bool managerSettingsLoading: false
   property bool managerSettingsMutating: false
+  property var diagnostics: []
+  property bool diagnosticsLoading: false
   property string profileSourceId: ""
   property string profileSourceText: ""
   property var profileSourceCallback: null
@@ -72,6 +75,7 @@ Item {
   property bool connected: false
   property bool hadConnection: false
   property bool managerReconcilePending: false
+  property bool managerInitialReconcileDone: false
   property string lastError: ""
   property string version: ""
   property string endpointTarget: ""
@@ -305,6 +309,14 @@ Item {
     return fmtBytes(bytes) + "/s"
   }
 
+  function profileNameFor(id) {
+    for (var i = 0; i < profiles.length; i++) {
+      if (String(profiles[i].id || "") === String(id || ""))
+        return String(profiles[i].name || id || "")
+    }
+    return String(id || "")
+  }
+
   function applyProfiles(raw) {
     profileLoading = false
     try {
@@ -314,6 +326,7 @@ Item {
       if (payload && payload.profiles !== undefined) {
         profiles = payload.profiles
         activeProfile = String(payload.activeProfile || "")
+        activeProfileName = profileNameFor(activeProfile)
         syncManagedConfigInfo()
       } else if (Array.isArray(payload)) {
         profiles = payload
@@ -338,7 +351,7 @@ Item {
   }
 
   function setManagerSetting(key, value) {
-    if (!managerInstalled || !key || value === undefined || value === null) return
+    if (!ready || !managerInstalled || !key || value === undefined || value === null) return
     managerSettingsMutating = true
     enqueueManager(["settings", "set", key, String(value)])
   }
@@ -351,6 +364,15 @@ Item {
     enqueueManager(["reconcile"])
     if (managerCurrentAction.length === 0 && managerActionQueue.length === 0)
       managerReconcilePending = false
+  }
+
+  function maybeInitialReconcile() {
+    if (!ready || !managerInstalled || !connected || managerInitialReconcileDone) return
+    // The manager status probe and the first controller probe are independent
+    // processes. Mark this edge once and let the manager queue serialize the
+    // actual restore with any profile action already in flight.
+    managerInitialReconcileDone = true
+    reconcileProfiles()
   }
 
   function enqueueManager(args) {
@@ -505,7 +527,14 @@ Item {
     if (page === "config") refreshConfig()
     else if (page === "rules") refreshRules()
     else if (page === "connections") refreshConnections()
+    else if (page === "diagnostics") refreshDiagnostics()
     else refresh()
+  }
+
+  function refreshDiagnostics() {
+    if (!ready || !managerInstalled || diagnosticsProc.running) return
+    diagnosticsLoading = true
+    diagnosticsProc.running = true
   }
 
   function refreshConfig() {
@@ -1011,10 +1040,12 @@ Item {
     var wasConnected = hadConnection
     hadConnection = true
     if (wasConnected) reconcileProfiles()
+    else maybeInitialReconcile()
   }
 
   onReadyChanged: {
     if (!ready) return
+    managerInitialReconcileDone = false
     endpointProc.running = true
     langProc.running = true
     managerChecking = true
@@ -1086,16 +1117,24 @@ Item {
           if (root.managerInstalled) {
             root.applyProfiles(text)
             root.refreshManagerSettings()
-            if (root.connected && root.hadConnection) root.reconcileProfiles()
+            // Cover the race where manager status finishes before the first
+            // successful controller poll. onConnectedChanged covers the other
+            // ordering and the reconnect path.
+            root.maybeInitialReconcile()
+            if (root.page === "diagnostics") root.refreshDiagnostics()
           }
         } catch (e) {
           root.managerInstalled = false
+          root.managerInitialReconcileDone = false
         }
       }
     }
     onExited: {
       root.managerChecking = false
-      if (exitCode !== 0) root.managerInstalled = false
+      if (exitCode !== 0) {
+        root.managerInstalled = false
+        root.managerInitialReconcileDone = false
+      }
       else if (root.managerInstalled) root.refreshManagerSettings()
     }
   }
@@ -1114,6 +1153,24 @@ Item {
       }
     }
     onExited: root.managerSettingsLoading = false
+  }
+
+  Process {
+    id: diagnosticsProc
+    command: ["/usr/bin/bash", root.managerRunner, "doctor"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.diagnosticsLoading = false
+        try {
+          var data = JSON.parse(text)
+          root.diagnostics = data.checks || []
+        } catch (e) {
+          root.diagnostics = [{id: "diagnostics", status: "error", message: root.t("parseError")}]
+        }
+      }
+    }
+    onExited: root.diagnosticsLoading = false
   }
 
   Process {
@@ -1480,7 +1537,7 @@ Item {
   }
 
   IpcHandler {
-    target: "io.github.lijiawei0305-pixel.mihomo.service"
+    target: "io.github.ZainCheung.mihomo.service"
 
     function state(): string {
       return JSON.stringify({

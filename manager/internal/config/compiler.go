@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/profile"
 	"os"
+
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
 )
 
 type Compiler struct {
@@ -51,6 +52,12 @@ func (c Compiler) managed(m map[string]any) map[string]any {
 }
 func (c Compiler) protected(m map[string]any) map[string]any {
 	out := clone(m).(map[string]any)
+	// A nil map means that no running core was available (for example while
+	// adding a profile before mihomo starts). Preserve source fields until the
+	// manager has a real controller snapshot to enforce.
+	if c.Protected == nil {
+		return out
+	}
 	for _, k := range []string{"external-controller", "external-controller-unix", "secret", "external-ui"} {
 		delete(out, k)
 		if v, ok := c.Protected[k]; ok {

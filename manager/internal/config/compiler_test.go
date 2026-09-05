@@ -1,9 +1,10 @@
 package config
 
 import (
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/profile"
 	"strings"
 	"testing"
+
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
 )
 
 func TestManagedDNSAndTUNAndProtectedFields(t *testing.T) {

@@ -1,0 +1,49 @@
+package doctor
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestDoctorValueHelpers(t *testing.T) {
+	data := map[string]any{
+		"mixed-port": json.Number("7890"),
+		"version":    "1.2.3",
+		"meta":       map[string]any{"version": "fallback"},
+	}
+	if got := intAt(data, "mixed-port"); got != 7890 {
+		t.Fatalf("intAt = %d, want 7890", got)
+	}
+	if got := firstString(data, "missing", "version"); got != "1.2.3" {
+		t.Fatalf("firstString = %q, want 1.2.3", got)
+	}
+	if got := firstString(data, "meta.version"); got != "fallback" {
+		t.Fatalf("nested firstString = %q, want fallback", got)
+	}
+}
+
+func TestDoctorNetworkValues(t *testing.T) {
+	report := Report{}
+	addNetworkChecks(&report, map[string]any{
+		"mixed-port": float64(7890),
+		"tun": map[string]any{
+			"enable": true,
+			"stack":  "gvisor",
+			"device": "mihomo",
+		},
+		"dns": map[string]any{
+			"enable":        true,
+			"enhanced-mode": "fake-ip",
+		},
+	})
+	checks := map[string]Check{}
+	for _, check := range report.Checks {
+		checks[check.ID] = check
+	}
+	if checks["tunEnabled"].Status != "ok" || checks["dnsEnabled"].Status != "ok" {
+		t.Fatalf("network checks = %#v", checks)
+	}
+	if checks["httpProxyPort"].Message != "7890" {
+		t.Fatalf("proxy port check = %#v", checks["httpProxyPort"])
+	}
+}

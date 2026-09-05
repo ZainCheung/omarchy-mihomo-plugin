@@ -1,11 +1,12 @@
 package profile
 
 import (
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/store"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/store"
 )
 
 func TestDefaultSettingsUseGVisorTUNStack(t *testing.T) {

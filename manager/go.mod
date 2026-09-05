@@ -1,4 +1,4 @@
-module github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager
+module github.com/ZainCheung/omarchy-mihomo-plugin/manager
 
 go 1.22
 

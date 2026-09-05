@@ -12,8 +12,8 @@ import qs.Commons
 Panel {
   id: root
 
-  moduleName: "io.github.lijiawei0305-pixel.mihomo"
-  ipcTarget: "io.github.lijiawei0305-pixel.mihomo"
+  moduleName: "io.github.ZainCheung.mihomo"
+  ipcTarget: "io.github.ZainCheung.mihomo"
   manageIpc: false
 
   readonly property var svc: bar?.shell?.serviceFor(root.moduleName)
@@ -31,6 +31,7 @@ Panel {
     : page === "config" ? configPage
     : page === "connections" ? connectionsPage
     : page === "rules" ? rulesPage
+    : page === "diagnostics" ? diagnosticsPage
     : homePage
 
   function goto(target) {
@@ -42,7 +43,7 @@ Panel {
   }
 
   function cyclePage(direction) {
-    var order = ["home", "profiles", "proxies", "config", "connections", "rules"]
+    var order = ["home", "profiles", "proxies", "config", "connections", "rules", "diagnostics"]
     var index = order.indexOf(page)
     if (index < 0) index = 0
     page = order[(index + direction + order.length) % order.length]
@@ -187,6 +188,7 @@ Panel {
         else if (text === "4") root.goto("config")
         else if (text === "5") root.goto("connections")
         else if (text === "6") root.goto("rules")
+        else if (text === "7") root.goto("diagnostics")
         else if (text === "r" && root.svc) root.svc.refreshPage()
         else if (text === "/" && root.currentPage
                  && typeof root.currentPage.focusFilter === "function")
@@ -264,9 +266,10 @@ Panel {
           NavButton { width: parent.width; pageId: "home";        glyph: "󰋜"; title: root.svc ? root.svc.t("navHome") : "Home" }
           NavButton { width: parent.width; pageId: "profiles";    glyph: "󰈙"; title: root.svc ? root.svc.t("navProfiles") : "Profiles" }
           NavButton { width: parent.width; pageId: "proxies";     glyph: "󰖟"; title: root.svc ? root.svc.t("navProxies") : "Proxies" }
-          NavButton { width: parent.width; pageId: "config";      glyph: "󰈙"; title: root.svc ? root.svc.t("navConfig") : "Config" }
+          NavButton { width: parent.width; pageId: "config";      glyph: "󰘚"; title: root.svc ? root.svc.t("navConfig") : "Config" }
           NavButton { width: parent.width; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
           NavButton { width: parent.width; pageId: "rules";       glyph: "󰘬"; title: root.svc ? root.svc.t("navRules") : "Rules" }
+          NavButton { width: parent.width; pageId: "diagnostics"; glyph: "󰒡"; title: root.svc ? root.svc.t("navDiagnostics") : "Diagnostics" }
         }
 
         Column {
@@ -360,6 +363,15 @@ Panel {
           id: connectionsPage
           anchors.fill: parent
           visible: root.page === "connections"
+          svc: root.svc
+          fg: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        DiagnosticsPage {
+          id: diagnosticsPage
+          anchors.fill: parent
+          visible: root.page === "diagnostics"
           svc: root.svc
           fg: root.fg
           fontFamily: root.fontFamily

@@ -9,6 +9,36 @@ Item {
   property color fg: Color.popups.text
   property string fontFamily: Style.font.family
 
+  function countText(count) {
+    if (!root.svc) return String(count)
+    return root.svc.t(count === 1 ? "profilesCountOne" : "profilesCountMany", count)
+  }
+
+  function typeText(type) {
+    if (!root.svc) return String(type || "")
+    return type === "remote" ? root.svc.t("profileTypeRemote") : root.svc.t("profileTypeLocal")
+  }
+
+  function fmtUpdated(stamp) {
+    var value = String(stamp || "")
+    if (value === "" || value.indexOf("0001-01-01") === 0) return ""
+    var parsed = new Date(value)
+    if (isNaN(parsed.getTime())) return value
+    return Qt.formatDateTime(parsed, "yyyy-MM-dd hh:mm")
+  }
+
+  function metaLine(meta) {
+    var parts = [root.typeText(meta.type)]
+    var updated = root.fmtUpdated(meta.lastSuccessAt)
+    if (updated !== "") parts.push(root.svc.t("profileUpdated", updated))
+    var usage = meta.subscriptionInfo || {}
+    if (Number(usage.total || 0) > 0)
+      parts.push(root.svc.t("profileQuota", root.svc.fmtBytes(usage.download || 0), root.svc.fmtBytes(usage.total || 0)))
+    var expire = Number(usage.expire || 0)
+    if (expire > 0) parts.push(root.svc.t("profileExpires", root.fmtUpdated(new Date(expire * 1000).toISOString())))
+    return parts.join(" · ")
+  }
+
   AddProfileDialog {
     id: addDialog
     svc: root.svc
@@ -70,7 +100,7 @@ Item {
     id: header
     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
     title: root.svc ? root.svc.t("profilesTitle") : "Profiles"
-    subtitle: root.svc && root.svc.managerInstalled ? root.svc.t("profilesCount", root.svc.profiles.length) : root.svc ? root.svc.t("managerMissing") : ""
+    subtitle: root.svc && root.svc.managerInstalled ? root.countText(root.svc.profiles.length) : root.svc ? root.svc.t("managerMissing") : ""
     foreground: root.fg; fontFamily: root.fontFamily
     PanelActionButton {
       iconText: "󰐕"
@@ -115,7 +145,7 @@ Item {
     model: root.svc ? root.svc.profiles : []
     delegate: Rectangle {
       required property var modelData
-      width: ListView.view.width; height: Style.space(64); radius: Style.cornerRadius
+      width: ListView.view.width; height: modelData.lastError ? Style.space(82) : Style.space(64); radius: Style.cornerRadius
       color: mouse.containsMouse ? Util.alpha(root.fg,0.07) : Util.alpha(root.fg,0.04)
       border.width: root.svc && root.svc.activeProfile === modelData.id ? 1 : 0
       border.color: Color.accent
@@ -123,14 +153,15 @@ Item {
       Column {
         anchors.left: parent.left; anchors.leftMargin: Style.space(12); anchors.right: actions.left; anchors.rightMargin: Style.space(8); anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(3)
         Text { width: parent.width; text: (root.svc && root.svc.activeProfile === modelData.id ? "● " : "○ ") + modelData.name; color: root.svc && root.svc.activeProfile === modelData.id ? Color.accent : root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight; renderType: Text.NativeRendering }
-        Text { width: parent.width; text: String(modelData.type || "") + (modelData.lastSuccessAt ? " · " + modelData.lastSuccessAt : ""); color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; renderType: Text.NativeRendering }
+        Text { width: parent.width; text: root.metaLine(modelData); color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; renderType: Text.NativeRendering }
+        Text { width: parent.width; visible: String(modelData.lastError || "") !== ""; text: root.svc ? root.svc.t("profileLastError", modelData.lastError) : String(modelData.lastError || ""); color: Color.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; renderType: Text.NativeRendering }
       }
       Row { id: actions; anchors.right: parent.right; anchors.rightMargin: Style.space(8); anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(4)
         PanelActionButton { iconText: "󰑐"; tooltipText: root.svc ? root.svc.t("updateProfile") : "Update"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: root.svc.updateProfile(modelData.id,false) }
         PanelActionButton { iconText: "󰇧"; tooltipText: root.svc ? root.svc.t("updateViaProxy") : "Update via proxy"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && root.svc.connected && !root.svc.profileMutating; onClicked: root.svc.updateProfileViaProxy(modelData.id) }
         PanelActionButton { iconText: "󰓝"; tooltipText: root.svc ? root.svc.t("renameProfile") : "Rename profile"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { renameDialog.profileId = modelData.id; renameDialog.profileName = String(modelData.name || ""); renameDialog.open(); } }
         PanelActionButton { iconText: "󰖟"; tooltipText: root.svc ? root.svc.t("editProfileUrl") : "Edit profile URL"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && modelData.type === "remote" && !root.svc.profileMutating; onClicked: { urlDialog.profileId = modelData.id; urlDialog.profileUrl = ""; root.svc.readProfileURL(modelData.id, function(value) { urlDialog.profileUrl = value; urlDialog.open(); }); } }
-        PanelActionButton { iconText: "󰈙"; tooltipText: root.svc ? root.svc.t("profileSource") : "Source"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { detail.profileId = modelData.id; detail.profileName = String(modelData.name || ""); detail.open() } }
+        PanelActionButton { iconText: "󰈙"; tooltipText: root.svc ? root.svc.t("profileSource") : "Source"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { detail.profileId = modelData.id; detail.profileName = String(modelData.name || ""); detail.showRuntime = false; detail.showOverride = false; detail.globalScope = false; detail.open() } }
         PanelActionButton { iconText: "󰅖"; tooltipText: root.svc ? root.svc.t("deleteProfile") : "Delete"; foreground: root.fg; hoverColor: Color.urgent; fontFamily: root.fontFamily; enabled: root.svc && !root.svc.profileMutating; onClicked: { root.profileRemoveId = modelData.id; root.profileRemoveName = String(modelData.name || ""); root.profileRemoving = true } }
       }
     }

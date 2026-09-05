@@ -432,7 +432,7 @@ Item {
 
         InfoRow {
           width: parent.width
-          label: "IPv6"
+          label: root.svc ? root.svc.t("ipv6") : "IPv6"
           value: root.svc && root.svc.ipv6
             ? root.svc.t("on") : (root.svc ? root.svc.t("off") : "Off")
           foreground: root.fg

@@ -704,11 +704,15 @@ PUT /configs?force=true
 
 ```json
 {
-  "path": "~/.config/omarchy-mihomo/runtime/candidate.yaml"
+  "path": "",
+  "payload": "<compiled YAML>"
 }
 ```
 
-不要重启 Mihomo service。
+The manager sends the compiled YAML in `payload` because Mihomo rejects a
+private plugin-store path that is outside its configured safe paths. The
+request is `PUT /configs?force=true`; `force=true` belongs in the query string,
+not in the JSON body.
 
 成功后检查：
 
@@ -864,6 +868,10 @@ omarchy-mihomo-manager profile add \
   --name <name>
 
 omarchy-mihomo-manager profile import-current \
+  --name <name>
+
+omarchy-mihomo-manager profile import \
+  --file <path> \
   --name <name>
 
 omarchy-mihomo-manager profile update <id>
@@ -1974,7 +1982,40 @@ omarchy-mihomo-manager profile select ...
 
 并让你当前这份“不包含 DNS/TUN 的订阅”在 Omarchy 上成功 TUN + DNS，整个项目最难、也最有价值的部分就已经验证完了。之后 QML 基本只是把这些能力产品化。
 
-[1]: https://github.com/lijiawei0305-pixel/omarchy-mihomo-plugin "GitHub - lijiawei0305-pixel/omarchy-mihomo-plugin: Omarchy status-bar plugin for a standalone mihomo core · GitHub"
-[2]: https://github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/blob/main/manifest.json "omarchy-mihomo-plugin/manifest.json at main · lijiawei0305-pixel/omarchy-mihomo-plugin · GitHub"
+---
+
+# 四十、文案与元数据质量验收
+
+文案检查报告纳入实施计划，与功能验收同等对待。每次新增 UI、CLI 或脚本输出时，
+同时检查以下约束：
+
+```text
+Profile = 配置档案
+Remote profile = 远程订阅
+Local profile = 本地导入
+只读状态使用「已启用 / 已停用」
+可执行动作使用「开启 / 关闭」
+TUN 统一写作「TUN（虚拟网卡）」
+```
+
+具体要求：
+
+1. 中英文 key 必须一一对应；页面不得硬编码面向用户的中英文句子。
+2. 中文提示使用完整书面句，统一中文引号为「」；英文提示补齐主语、谓语和介词。
+3. 数量文案必须处理单复数，避免 `1 profiles`、`1 rules` 一类输出。
+4. URL、Secret、token 和命令错误不能出现在普通列表或日志中；显式查看 URL 才返回原值。
+5. README、manifest、模块 ID、安装脚本、Go module 和 GitHub Release 地址必须使用同一仓库身份。
+6. README 同时提供英文和简体中文快速上手说明，并明确说明插件不启动 Mihomo、不自动执行 sudo。
+
+文案改动的回归检查：
+
+```text
+英文界面：Profile / Remote subscription / Local import / Enabled / Disabled
+中文界面：配置档案 / 远程订阅 / 本地导入 / 已启用 / 已停用
+未连接、更新失败、校验失败、重载失败均有明确可操作的提示
+```
+
+[1]: https://github.com/ZainCheung/omarchy-mihomo-plugin "GitHub - ZainCheung/omarchy-mihomo-plugin: Omarchy status-bar plugin for a standalone mihomo core · GitHub"
+[2]: https://github.com/ZainCheung/omarchy-mihomo-plugin/blob/main/manifest.json "omarchy-mihomo-plugin/manifest.json at main · ZainCheung/omarchy-mihomo-plugin · GitHub"
 [3]: https://github.com/Clash-Verge-rev/clash-verge-rev?utm_source=chatgpt.com "GitHub - clash-verge-rev/clash-verge-rev: A modern GUI client based on Tauri, designed to run in Windows, macOS and Linux for tailored proxy experience · GitHub"
 [4]: https://github.com/MetaCubeX/mihomo/issues/3063?utm_source=chatgpt.com "[Bug] 两个`PORT`规则没有正确处理端口范围格式 · Issue #3063 · MetaCubeX/mihomo · GitHub"

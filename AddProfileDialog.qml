@@ -28,7 +28,7 @@ Popup {
   Column {
     width: parent.width; spacing: Style.space(10)
     Text { text: root.operationTitle; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
-    TextField { id: name; width: parent.width; visible: !root.isUrlEdit; placeholderText: root.svc ? root.svc.t("profileName") : "Name"; color: root.foreground; font.family: root.fontFamily }
+    TextField { id: name; width: parent.width; visible: !root.isUrlEdit; placeholderText: root.svc ? root.svc.t(root.isLocalImport ? "profileNameLocal" : root.isRename ? "profileName" : "profileNameRemote") : "Name"; color: root.foreground; font.family: root.fontFamily }
     TextField { id: url; width: parent.width; visible: !root.isLocalImport && !root.isRename; placeholderText: root.svc ? root.svc.t("subscriptionUrl") : "Subscription URL"; color: root.foreground; font.family: root.fontFamily; inputMethodHints: Qt.ImhUrlCharactersOnly }
     PlainTextDropdown {
       width: parent.width

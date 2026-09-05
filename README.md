@@ -1,7 +1,12 @@
 # Mihomo
 
 Omarchy bar plugin and native Mihomo client/control plane. It keeps the existing
-Home / Proxies / Config / Connections / Rules panel and adds a Go profile manager.
+Home / Profiles / Proxies / Config / Connections / Rules / Diagnostics panel and
+adds a Go profile manager.
+
+It supports remote subscriptions, local YAML imports, profile switching and
+updates, managed DNS/TUN settings, source/runtime/override inspection, atomic
+apply with rollback, and recovery after a core restart.
 
 The managed TUN default is `gvisor`; legacy `mixed` settings are migrated when
 loaded or compiled because `mixed` is unreliable on some Linux setups.
@@ -25,8 +30,8 @@ Source Config → Global Override → Profile Override → Managed DNS/TUN
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/lijiawei0305-pixel/omarchy-mihomo-plugin.git --enable
-omarchy bar move io.github.lijiawei0305-pixel.mihomo --section right
+omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
+omarchy bar move io.github.ZainCheung.mihomo --section right
 ```
 
 Installation never downloads a helper or uses sudo. Profile Manager is installed
@@ -39,6 +44,7 @@ provided during development with `OMARCHY_MIHOMO_MANAGER_BIN=/path/to/binary`.
 bin/mihomo-manager status
 bin/mihomo-manager profile add --url https://example.test/config.yaml --name MySubscription
 bin/mihomo-manager profile import-current --name "Existing config"
+bin/mihomo-manager profile import --file /path/to/config.yaml --name "Local file"
 bin/mihomo-manager profile list
 bin/mihomo-manager profile select <id>
 bin/mihomo-manager profile update <id> [--via-proxy]

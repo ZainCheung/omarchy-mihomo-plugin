@@ -78,22 +78,34 @@ func MixedPort() (int, error) {
 	if e = json.Unmarshal(b, &x); e != nil {
 		return 0, e
 	}
-	for _, k := range []string{"mixed-port", "port", "socks-port"} {
-		if v, ok := x[k]; ok {
-			switch n := v.(type) {
-			case float64:
-				if n > 0 {
-					return int(n), nil
-				}
-			case json.Number:
-				i, _ := n.Int64()
-				if i > 0 {
-					return int(i), nil
-				}
+	if port := HTTPProxyPort(x); port > 0 {
+		return port, nil
+	}
+	return 0, fmt.Errorf("mihomo has no mixed or HTTP proxy port")
+}
+
+// HTTPProxyPort returns a port that can accept an HTTP proxy request. A
+// socks-port is intentionally excluded: update-via-proxy uses Go's HTTP
+// CONNECT transport and cannot speak SOCKS on that endpoint.
+func HTTPProxyPort(config map[string]any) int {
+	for _, key := range []string{"mixed-port", "port"} {
+		switch number := config[key].(type) {
+		case float64:
+			if number > 0 {
+				return int(number)
+			}
+		case json.Number:
+			value, _ := number.Int64()
+			if value > 0 {
+				return int(value)
+			}
+		case int:
+			if number > 0 {
+				return number
 			}
 		}
 	}
-	return 0, fmt.Errorf("mihomo has no proxy port")
+	return 0
 }
 func Apply(path string) error {
 	// Mihomo only permits path-based reloads inside its home directory (or an

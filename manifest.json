@@ -5,7 +5,7 @@
   "version": "0.4.0",
   "author": "ZainCheung",
   "license": "MIT",
-  "description": "Control panel for the mihomo core: Home, Proxies, Config, Connections, Rules. Talks to the external controller directly; no GUI client required.",
+  "description": "Control panel for the mihomo core: Home, Profiles, Proxies, Config, Connections, Rules and Diagnostics. Talks to the external controller directly; no GUI client required.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Mihomo",
-    "description": "mihomo proxy core panel: switch nodes, reload config, connections and rules",
+    "description": "mihomo core panel: profiles, nodes, DNS/TUN, connections, rules and diagnostics",
     "category": "Network",
     "defaultSection": "right",
     "allowMultiple": false

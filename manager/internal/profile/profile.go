@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lijiawei0305-pixel/omarchy-mihomo-plugin/manager/internal/store"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/store"
 )
 
 type SubscriptionInfo struct {
