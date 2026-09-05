@@ -47,6 +47,7 @@ Item {
   property var managerSettings: ({})
   property bool managerSettingsLoading: false
   property bool managerSettingsMutating: false
+  property var pendingManagerSettings: ({})
   property var diagnostics: []
   property bool diagnosticsLoading: false
   property string profileSourceId: ""
@@ -352,8 +353,31 @@ Item {
 
   function setManagerSetting(key, value) {
     if (!ready || !managerInstalled || !key || value === undefined || value === null) return
+    var pending = {}
+    for (var field in pendingManagerSettings) pending[field] = pendingManagerSettings[field]
+    pending[key] = String(value)
+    pendingManagerSettings = pending
+    settingsBatchTimer.restart()
+  }
+
+  function flushManagerSettings() {
+    var patch = ["settings", "patch"]
+    for (var key in pendingManagerSettings) {
+      patch.push(key)
+      patch.push(String(pendingManagerSettings[key]))
+    }
+    pendingManagerSettings = ({})
+    if (patch.length === 2) return
     managerSettingsMutating = true
-    enqueueManager(["settings", "set", key, String(value)])
+    enqueueManager(patch)
+  }
+
+  function managerActionPending(kind) {
+    if (managerCurrentAction.length > 0 && managerCurrentAction[0] === kind) return true
+    for (var i = 0; i < managerActionQueue.length; i++) {
+      if (managerActionQueue[i].length > 0 && managerActionQueue[i][0] === kind) return true
+    }
+    return false
   }
 
   function reconcileProfiles() {
@@ -873,7 +897,10 @@ Item {
       "auto-route": true,
       "auto-detect-interface": true
     }
-    tun.stack = tunStack !== "" && tunStack !== "mixed" ? tunStack : "gvisor"
+    // Preserve an explicit system/mixed stack in raw-config mode. The manager
+    // default is gVisor, but enabling TUN must not silently rewrite a user's
+    // existing Mihomo stack choice.
+    tun.stack = tunStack !== "" ? tunStack : "gvisor"
     if (tunDevice !== "") tun.device = tunDevice
     if (tunDnsHijack !== "") tun["dns-hijack"] = tunDnsHijack.split(", ")
     else tun["dns-hijack"] = ["any:53"]
@@ -1084,6 +1111,15 @@ Item {
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  // Let a short burst of edits become one atomic manager update. This avoids
+  // compiling, validating, and applying the active profile once per field.
+  Timer {
+    id: settingsBatchTimer
+    interval: 400
+    repeat: false
+    onTriggered: root.flushManagerSettings()
   }
 
   Timer {
@@ -1351,11 +1387,12 @@ Item {
         root.notice = root.t("profileActionCompleted")
       }
       root.profileMutating = false
-      if (finishedAction.length > 0 && finishedAction[0] === "settings") root.managerSettingsMutating = false
       if (finishedAction.length > 0 && finishedAction[0] === "reconcile") root.managerReconcilePending = false
       if (finishedAction.length > 0 && finishedAction[0] === "config") root.configReloading = false
       root.managerCurrentAction = []
       root.runNextManagerAction()
+      if (finishedAction.length > 0 && finishedAction[0] === "settings")
+        root.managerSettingsMutating = root.managerActionPending("settings")
       root.refreshProfiles()
       root.refreshManagerSettings()
       if (finishedAction.length > 0 && finishedAction[0] === "config") root.refreshConfigInfo()

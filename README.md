@@ -8,8 +8,9 @@ It supports remote subscriptions, local YAML imports, profile switching and
 updates, managed DNS/TUN settings, source/runtime/override inspection, atomic
 apply with rollback, and recovery after a core restart.
 
-The managed TUN default is `gvisor`; legacy `mixed` settings are migrated when
-loaded or compiled because `mixed` is unreliable on some Linux setups.
+The managed TUN default is `gvisor`. `system`, `gvisor`, and `mixed` remain
+available; an explicit `mixed` choice is preserved so the user can evaluate it
+against local firewall behavior.
 
 ## Modes
 
@@ -48,6 +49,7 @@ bin/mihomo-manager profile import --file /path/to/config.yaml --name "Local file
 bin/mihomo-manager profile list
 bin/mihomo-manager profile select <id>
 bin/mihomo-manager profile update <id> [--via-proxy]
+bin/mihomo-manager settings patch dns-enable true tun-stack gvisor
 bin/mihomo-manager reconcile
 bin/mihomo-manager doctor
 ```
@@ -60,9 +62,9 @@ round-trip rewritten. Runtime files are in `runtime/`.
 
 The compiler's V1 merge rules are recursive map merge, scalar replacement,
 whole-array replacement, and `null` deletion. DNS and TUN default to Managed;
-managed TUN uses the `gvisor` stack by default. Existing `mixed` TUN settings
-are normalized to `gvisor`; set either management mode to `inherit` to preserve
-source/override values.
+managed TUN uses the `gvisor` stack by default. Managed DNS/TUN overlay only
+the fields exposed by the manager and preserve other source/override fields;
+set either management mode to `inherit` to leave that section untouched.
 Managed profiles preserve the running core's `external-controller`, Unix
 controller, `secret`, and `external-ui` fields.
 

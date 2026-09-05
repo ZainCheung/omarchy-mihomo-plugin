@@ -341,7 +341,49 @@ func addProxyConnectivityCheck(r *Report, configs map[string]any) {
 	cmd := exec.Command(curl, "--fail", "--silent", "--show-error", "--max-time", "8", "--connect-timeout", "5", "--proxy", proxy, "--head", "https://www.gstatic.com/generate_204")
 	if err := cmd.Run(); err != nil {
 		appendCheck(r, "proxyConnectivity", "warning", "proxy connectivity check failed", "diagnosticProxyCheckFailed")
+		addFirewallTUNCompatibilityCheck(r, configs)
 		return
 	}
 	appendCheck(r, "proxyConnectivity", "ok", "proxy request succeeded", "diagnosticProxyCheckSucceeded")
+}
+
+func addFirewallTUNCompatibilityCheck(r *Report, configs map[string]any) {
+	stack, ok := firewallSensitiveTUNStack(configs)
+	if !ok {
+		return
+	}
+	firewall, active := activeFirewall()
+	if !active {
+		return
+	}
+	appendCheck(r, "firewallTunCompatibility", "warning",
+		fmt.Sprintf("%s TUN stack may conflict with %s; try gVisor or adjust firewall rules", stack, firewall),
+		"diagnosticFirewallTunCompatibility", stack, firewall)
+}
+
+func firewallSensitiveTUNStack(configs map[string]any) (string, bool) {
+	tun := objectAt(configs, "tun")
+	enabled, ok := boolAt(tun, "enable")
+	if !ok || !enabled {
+		return "", false
+	}
+	stack := strings.ToLower(strings.TrimSpace(firstString(tun, "stack")))
+	if stack != "system" && stack != "mixed" {
+		return "", false
+	}
+	return stack, true
+}
+
+func activeFirewall() (string, bool) {
+	if ufw, err := exec.LookPath("ufw"); err == nil {
+		if output, runErr := exec.Command(ufw, "status").CombinedOutput(); runErr == nil && strings.Contains(strings.ToLower(string(output)), "status: active") {
+			return "UFW", true
+		}
+	}
+	if firewallCmd, err := exec.LookPath("firewall-cmd"); err == nil {
+		if output, runErr := exec.Command(firewallCmd, "--state").CombinedOutput(); runErr == nil && strings.EqualFold(strings.TrimSpace(string(output)), "running") {
+			return "firewalld", true
+		}
+	}
+	return "", false
 }

@@ -259,6 +259,7 @@ QtObject {
     tunStack: "TUN stack",
     tunStackGvisor: "gVisor",
     tunStackSystem: "System",
+    tunStackMixed: "Mixed",
     tunAutoRoute: "Auto route",
     tunAutoDetect: "Auto-detect interface",
     tunStrictRoute: "Strict route",
@@ -313,6 +314,7 @@ QtObject {
     diagnosticCurlUnavailable: "curl is unavailable",
     diagnosticProxyCheckFailed: "Proxy connectivity check failed",
     diagnosticProxyCheckSucceeded: "Proxy request succeeded",
+    diagnosticFirewallTunCompatibility: "%1 TUN stack may conflict with %2; try gVisor or adjust firewall rules.",
     diagnostic_process: "Mihomo process",
     diagnostic_version: "Mihomo version",
     diagnostic_coreExecutable: "Core executable",
@@ -334,6 +336,7 @@ QtObject {
     diagnostic_httpProxyPort: "HTTP proxy port",
     diagnostic_dnsQuery: "DNS query",
     diagnostic_proxyConnectivity: "Proxy connectivity",
+    diagnostic_firewallTunCompatibility: "Firewall / TUN",
 
     language: "Language",
     languageHint: "Default is English. The choice is saved in ~/.config/omarchy-mihomo/ui."
@@ -578,6 +581,7 @@ QtObject {
     tunStack: "TUN 栈",
     tunStackGvisor: "gVisor",
     tunStackSystem: "系统",
+    tunStackMixed: "Mixed",
     tunAutoRoute: "自动路由",
     tunAutoDetect: "自动识别网卡",
     tunStrictRoute: "严格路由",
@@ -632,6 +636,7 @@ QtObject {
     diagnosticCurlUnavailable: "curl 不可用",
     diagnosticProxyCheckFailed: "代理连通性检查失败",
     diagnosticProxyCheckSucceeded: "代理请求成功",
+    diagnosticFirewallTunCompatibility: "%1 TUN 栈可能与 %2 冲突；可以尝试 gVisor，或调整防火墙规则。",
     diagnostic_process: "mihomo 进程",
     diagnostic_version: "mihomo 版本",
     diagnostic_coreExecutable: "内核可执行文件",
@@ -653,6 +658,7 @@ QtObject {
     diagnostic_httpProxyPort: "HTTP 代理端口",
     diagnostic_dnsQuery: "DNS 查询",
     diagnostic_proxyConnectivity: "代理连通性",
+    diagnostic_firewallTunCompatibility: "防火墙 / TUN",
 
     language: "语言",
     languageHint: "默认英文。选择会保存在 ~/.config/omarchy-mihomo/ui。"

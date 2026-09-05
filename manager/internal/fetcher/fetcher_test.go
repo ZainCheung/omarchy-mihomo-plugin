@@ -1,6 +1,8 @@
 package fetcher
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,6 +59,9 @@ func TestFetchRejectsUserinfo(t *testing.T) {
 }
 
 func TestRedirectLimit(t *testing.T) {
+	old := allowPrivateHosts
+	allowPrivateHosts = true
+	defer func() { allowPrivateHosts = old }()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := r.URL.Query().Get("n")
@@ -73,6 +78,9 @@ func TestRedirectLimit(t *testing.T) {
 }
 
 func TestRedirectRejectsUnsupportedScheme(t *testing.T) {
+	old := allowPrivateHosts
+	allowPrivateHosts = true
+	defer func() { allowPrivateHosts = old }()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "file:///secret/token")
 		w.WriteHeader(http.StatusFound)
@@ -80,5 +88,40 @@ func TestRedirectRejectsUnsupportedScheme(t *testing.T) {
 	defer srv.Close()
 	if _, err := Fetch(srv.URL, "", "", "", false, 0); err == nil || containsSecret(err.Error()) {
 		t.Fatalf("unexpected redirect error: %v", err)
+	}
+}
+
+func TestFetchRejectsPrivateResolvedHost(t *testing.T) {
+	oldAllow := allowPrivateHosts
+	oldLookup := lookupIP
+	allowPrivateHosts = false
+	lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("10.0.0.1")}}, nil
+	}
+	defer func() {
+		allowPrivateHosts = oldAllow
+		lookupIP = oldLookup
+	}()
+
+	if _, err := Fetch("https://subscription.example.test/config.yaml", "", "", "", false, 0); err == nil {
+		t.Fatal("expected a hostname resolving to a private address to be rejected")
+	}
+}
+
+func TestSafeDialRejectsPrivateResolvedHost(t *testing.T) {
+	oldAllow := allowPrivateHosts
+	oldLookup := lookupIP
+	allowPrivateHosts = false
+	lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+	}
+	defer func() {
+		allowPrivateHosts = oldAllow
+		lookupIP = oldLookup
+	}()
+
+	dial := safeDialContext("")
+	if _, err := dial(context.Background(), "tcp", "subscription.example.test:443"); err == nil {
+		t.Fatal("expected the custom dialer to reject a private DNS result")
 	}
 }

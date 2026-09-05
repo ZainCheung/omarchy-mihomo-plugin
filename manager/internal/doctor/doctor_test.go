@@ -47,3 +47,21 @@ func TestDoctorNetworkValues(t *testing.T) {
 		t.Fatalf("proxy port check = %#v", checks["httpProxyPort"])
 	}
 }
+
+func TestFirewallSensitiveTUNStack(t *testing.T) {
+	if stack, ok := firewallSensitiveTUNStack(map[string]any{
+		"tun": map[string]any{"enable": true, "stack": "mixed"},
+	}); !ok || stack != "mixed" {
+		t.Fatalf("mixed TUN stack = %q, %v", stack, ok)
+	}
+	if _, ok := firewallSensitiveTUNStack(map[string]any{
+		"tun": map[string]any{"enable": true, "stack": "gvisor"},
+	}); ok {
+		t.Fatal("gvisor should not trigger a firewall compatibility hint")
+	}
+	if _, ok := firewallSensitiveTUNStack(map[string]any{
+		"tun": map[string]any{"enable": false, "stack": "system"},
+	}); ok {
+		t.Fatal("disabled TUN should not trigger a firewall compatibility hint")
+	}
+}

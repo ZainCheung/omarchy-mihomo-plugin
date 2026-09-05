@@ -47,8 +47,9 @@ bin/mihomo-manager doctor
 ```
 
 远程订阅会先下载、解析、编译并通过 `mihomo -t -f` 校验，成功后才替换源配置。
-托管配置的运行时文件保存在 `~/.config/omarchy-mihomo/runtime/`，包含控制器 Secret
-的状态文件权限为 0600。
+托管 DNS/TUN 只覆盖管理器明确拥有的字段，订阅中的其他字段会保留；TUN 默认使用
+`gvisor`，但用户明确选择的 `system` 或 `mixed` 会原样保留。托管配置的运行时文件保存在
+`~/.config/omarchy-mihomo/runtime/`，包含控制器 Secret 的状态文件权限为 0600。
 
 更完整的实现约束、合并顺序和验收用例见
 [`docs/implement.md`](docs/implement.md)。

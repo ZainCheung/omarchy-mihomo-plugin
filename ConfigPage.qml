@@ -508,7 +508,8 @@ Item {
             label: root.svc ? root.svc.t("tunStack") : "TUN stack"
             options: [
               {label: root.svc ? root.svc.t("tunStackGvisor") : "gVisor", value: "gvisor"},
-              {label: root.svc ? root.svc.t("tunStackSystem") : "System", value: "system"}
+              {label: root.svc ? root.svc.t("tunStackSystem") : "System", value: "system"},
+              {label: root.svc ? root.svc.t("tunStackMixed") : "Mixed", value: "mixed"}
             ]
             value: String(root.managerValue("tun", "stack", "gvisor"))
             foreground: root.fg

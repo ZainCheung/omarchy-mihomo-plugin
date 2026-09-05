@@ -35,7 +35,10 @@ func (c Compiler) managed(m map[string]any) map[string]any {
 	out := clone(m).(map[string]any)
 	if c.Settings.DNSManagement == "managed" {
 		d := map[string]any{"enable": c.Settings.DNS.Enable, "ipv6": c.Settings.DNS.IPv6, "enhanced-mode": c.Settings.DNS.EnhancedMode, "fake-ip-range": c.Settings.DNS.FakeIPRange, "default-nameserver": toAny(c.Settings.DNS.DefaultNameserver), "nameserver": toAny(c.Settings.DNS.Nameserver), "proxy-server-nameserver": toAny(c.Settings.DNS.ProxyServerNameserver), "fake-ip-filter": toAny(c.Settings.DNS.FakeIPFilter)}
-		out["dns"] = d
+		// Managed settings own only the fields exposed by the manager. Keep
+		// source/profile fields that Mihomo supports but this version does not
+		// model (for example nameserver-policy and fallback).
+		out = DeepMerge(out, map[string]any{"dns": d})
 	}
 	if c.Settings.TUNManagement == "managed" {
 		t := map[string]any{
@@ -46,7 +49,9 @@ func (c Compiler) managed(m map[string]any) map[string]any {
 			"strict-route":          c.Settings.TUN.StrictRoute,
 			"dns-hijack":            toAny(c.Settings.TUN.DNSHijack),
 		}
-		out["tun"] = t
+		// TUN has the same forward-compatibility requirement: preserve fields
+		// such as mtu, auto-redirect, and route include/exclude settings.
+		out = DeepMerge(out, map[string]any{"tun": t})
 	}
 	return out
 }

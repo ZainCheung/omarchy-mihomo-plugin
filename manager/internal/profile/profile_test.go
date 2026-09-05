@@ -15,10 +15,13 @@ func TestDefaultSettingsUseGVisorTUNStack(t *testing.T) {
 	}
 }
 
-func TestNormalizeTUNStackMigratesMixedAndEmpty(t *testing.T) {
-	for _, input := range []string{"", "mixed", " MIXED "} {
-		if got := NormalizeTUNStack(input); got != DefaultTUNStack {
-			t.Errorf("NormalizeTUNStack(%q) = %q, want %q", input, got, DefaultTUNStack)
+func TestNormalizeTUNStackDefaultsEmptyAndPreservesMixed(t *testing.T) {
+	if got := NormalizeTUNStack(""); got != DefaultTUNStack {
+		t.Errorf("NormalizeTUNStack(empty) = %q, want %q", got, DefaultTUNStack)
+	}
+	for _, input := range []string{"mixed", " MIXED "} {
+		if got := NormalizeTUNStack(input); got != "mixed" {
+			t.Errorf("NormalizeTUNStack(%q) = %q, want mixed", input, got)
 		}
 	}
 	if got := NormalizeTUNStack("system"); got != "system" {
@@ -26,7 +29,7 @@ func TestNormalizeTUNStackMigratesMixedAndEmpty(t *testing.T) {
 	}
 }
 
-func TestLoadSettingsMigratesMixedStack(t *testing.T) {
+func TestLoadSettingsPreservesMixedStack(t *testing.T) {
 	s := &store.Store{Home: t.TempDir()}
 	if err := s.Ensure(); err != nil {
 		t.Fatal(err)
@@ -40,15 +43,15 @@ func TestLoadSettingsMigratesMixedStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.TUN.Stack != DefaultTUNStack {
-		t.Fatalf("loaded TUN stack = %q, want %q", got.TUN.Stack, DefaultTUNStack)
+	if got.TUN.Stack != "mixed" {
+		t.Fatalf("loaded TUN stack = %q, want mixed", got.TUN.Stack)
 	}
 	persisted, err := os.ReadFile(s.SettingsPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(persisted), `"stack": "gvisor"`) {
-		t.Fatalf("settings migration was not persisted: %s", persisted)
+	if !strings.Contains(string(persisted), `"stack": "mixed"`) {
+		t.Fatalf("explicit mixed stack was not preserved: %s", persisted)
 	}
 }
 

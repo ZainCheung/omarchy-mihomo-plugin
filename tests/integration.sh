@@ -176,7 +176,9 @@ exit 0
 SH
 chmod +x "$FAKE/mihomo"
 
-/usr/lib/go/bin/go -C "$ROOT/manager" build -trimpath -o "$TMP/manager" ./cmd/omarchy-mihomo-manager
+GO_BIN="${GO_BIN:-$(command -v go || true)}"
+[[ -n "$GO_BIN" ]] || { echo 'go is required for integration tests' >&2; exit 1; }
+"$GO_BIN" -C "$ROOT/manager" build -trimpath -o "$TMP/manager" ./cmd/omarchy-mihomo-manager
 export MIHOMO_CTL="$FAKE/mihomo-ctl"
 export MIHOMO_BIN="$FAKE/mihomo"
 export FAKE_MIHOMO_BIN="$FAKE/mihomo"
@@ -282,6 +284,10 @@ $MANAGER settings set dns-enable false >/dev/null
 assert_file_contains "$STORE/settings.json" '"enable": false'
 $MANAGER settings set tun-stack system >/dev/null
 assert_file_contains "$STORE/settings.json" '"stack": "system"'
+$MANAGER settings patch dns-enable true dns-ipv6 true tun-stack mixed >/dev/null
+assert_file_contains "$STORE/settings.json" '"enable": true'
+assert_file_contains "$STORE/settings.json" '"ipv6": true'
+assert_file_contains "$STORE/settings.json" '"stack": "mixed"'
 $MANAGER settings set dns-nameserver '1.1.1.1, 8.8.8.8' >/dev/null
 assert_file_contains "$STORE/settings.json" '8.8.8.8'
 fail_cmd settings set tun-management invalid

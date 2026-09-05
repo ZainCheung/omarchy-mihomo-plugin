@@ -1230,11 +1230,23 @@ func settingsCommand(args []string) {
 		ok(settings)
 		return
 	}
-	if args[0] != "set" || len(args) < 3 {
-		fail("args", fmt.Errorf("settings set key value required"))
+	updates := []settingUpdate{}
+	switch args[0] {
+	case "set":
+		if len(args) < 3 {
+			fail("args", fmt.Errorf("settings set key value required"))
+		}
+		updates = append(updates, settingUpdate{key: args[1], value: strings.Join(args[2:], " ")})
+	case "patch":
+		if len(args) < 3 || (len(args)-1)%2 != 0 {
+			fail("args", fmt.Errorf("settings patch requires key value pairs"))
+		}
+		for i := 1; i < len(args); i += 2 {
+			updates = append(updates, settingUpdate{key: args[i], value: args[i+1]})
+		}
+	default:
+		fail("args", fmt.Errorf("settings set or patch required"))
 	}
-	key := args[1]
-	value := strings.Join(args[2:], " ")
 	var next profile.Settings
 	err := runLocked(func() error {
 		old, err := profile.LoadSettings(st)
@@ -1242,8 +1254,10 @@ func settingsCommand(args []string) {
 			return err
 		}
 		next = old
-		if err = setSetting(&next, key, value); err != nil {
-			return err
+		for _, update := range updates {
+			if err = setSetting(&next, update.key, update.value); err != nil {
+				return err
+			}
 		}
 		if err = validateSettings(next); err != nil {
 			return err
@@ -1278,6 +1292,11 @@ func settingsCommand(args []string) {
 		fail("apply", err)
 	}
 	ok(next)
+}
+
+type settingUpdate struct {
+	key   string
+	value string
 }
 
 func parseBoolSetting(value string) (bool, error) {
@@ -1380,8 +1399,8 @@ func validateSettings(settings profile.Settings) error {
 		return fmt.Errorf("dns-enhanced-mode must be fake-ip or redir-host")
 	}
 	stack := profile.NormalizeTUNStack(settings.TUN.Stack)
-	if stack != "system" && stack != "gvisor" {
-		return fmt.Errorf("tun-stack must be system or gvisor")
+	if stack != "system" && stack != "gvisor" && stack != "mixed" {
+		return fmt.Errorf("tun-stack must be system, gvisor, or mixed")
 	}
 	if strings.TrimSpace(settings.DNS.FakeIPRange) == "" {
 		return fmt.Errorf("dns-fake-ip-range must not be empty")

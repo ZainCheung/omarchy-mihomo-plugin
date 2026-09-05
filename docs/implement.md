@@ -389,7 +389,7 @@ Merge 顺序：
 5. Protected Runtime Settings
 ```
 
-其中 Managed Settings 是最高级的用户 GUI 设置，因此开启 Managed DNS/TUN 时应覆盖订阅对应字段。
+其中 Managed Settings 是最高级的用户 GUI 设置，因此开启 Managed DNS/TUN 时应覆盖订阅对应的已建模字段；未被管理器建模的 Mihomo 字段必须保留，不能因为版本落后而丢失。
 
 ---
 
@@ -418,7 +418,17 @@ TUN management:
 `managed`：
 
 ```text
-由 Omarchy Mihomo 生成最终字段
+由 Omarchy Mihomo 覆盖已建模字段，并保留 source / override 中的其他字段
+```
+
+Managed DNS/TUN 使用 known-fields overlay，而不是替换整个 map：
+
+```text
+source.dns / source.tun
+        ↓
+manager-owned field patch
+        ↓
+保留未知字段的 runtime config
 ```
 
 默认推荐：
@@ -445,6 +455,10 @@ dns-hijack:
 ```
 
 但新的 managed mode 不应继续依赖 runtime PATCH。
+
+Managed TUN 的默认栈是 `gvisor`，但允许 `gvisor`、`system`、`mixed` 三个 Mihomo 值。
+空值才使用默认值；用户显式选择 `mixed` 时不得在读取、保存或编译时静默改写为
+`gvisor`。Doctor 可以提示 system/mixed 与防火墙的兼容性风险，但不替用户迁移配置。
 
 改为生成持久 runtime：
 
@@ -1531,6 +1545,8 @@ inherit DNS
 
 managed TUN
 inherit TUN
+managed DNS/TUN preserve unknown fields
+explicit mixed TUN stack
 
 protected controller fields
 
@@ -1551,6 +1567,10 @@ profile switch
 apply failure rollback
 
 ETag 304
+
+redirect / DNS resolution SSRF protection
+
+settings patch applies a burst of UI edits once
 
 atomic file write
 
@@ -1772,6 +1792,10 @@ reconnect reconcile
 ### Phase 6 — Distribution
 
 ```text
+PR / branch push checks
+go test ./...
+integration.sh
+plugin manifest validation
 GitHub Actions
 amd64
 arm64

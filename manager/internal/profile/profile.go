@@ -66,11 +66,13 @@ type TUNSettings struct {
 
 const DefaultTUNStack = "gvisor"
 
-// NormalizeTUNStack keeps configurations created by older versions compatible
-// while avoiding the legacy mixed stack that is unreliable on some systems.
+// NormalizeTUNStack applies the product default without taking ownership of an
+// explicit stack selected by the user. In particular, mixed remains a valid
+// Mihomo choice; the UI/doctor can explain firewall trade-offs without silently
+// changing the user's source or settings.
 func NormalizeTUNStack(stack string) string {
 	stack = strings.ToLower(strings.TrimSpace(stack))
-	if stack == "" || stack == "mixed" {
+	if stack == "" {
 		return DefaultTUNStack
 	}
 	return stack
@@ -129,8 +131,8 @@ func LoadSettings(s *store.Store) (Settings, error) {
 	if e != nil {
 		return x, e
 	}
-	// The old default was mixed. Normalize it on read and persist the
-	// migration so future compiles cannot bring the broken default back.
+	// Normalize casing/whitespace, but preserve an explicit mixed stack. The
+	// default is gvisor; migration must not rewrite a user's chosen strategy.
 	if normalized := NormalizeTUNStack(x.TUN.Stack); normalized != x.TUN.Stack {
 		x.TUN.Stack = normalized
 		if e = SaveSettings(s, x); e != nil {
