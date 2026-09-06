@@ -4,12 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/policy"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/rules"
 )
 
 func TestManagedDNSAndTUNAndProtectedFields(t *testing.T) {
 	c := Compiler{Settings: profile.DefaultSettings(), Protected: map[string]any{"external-controller": "127.0.0.1:9090", "secret": "keep"}}
-	out, e := c.Compile([]byte("mode: rule\nexternal-controller: evil:1\ndns:\n  enable: false\n"), nil, []byte("{}\n"))
+	out, e := c.Compile(CompileInput{Source: []byte("mode: rule\nexternal-controller: evil:1\ndns:\n  enable: false\n"), ProfileOverride: []byte("{}\n")})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -41,7 +43,7 @@ tun:
     include-interface:
       - eth0
 `)
-	out, err := (Compiler{Settings: s}).Compile(source, nil, nil)
+	out, err := (Compiler{Settings: s}).Compile(CompileInput{Source: source})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ tun:
 func TestManagedTUNStackPreservesExplicitMixed(t *testing.T) {
 	s := profile.DefaultSettings()
 	s.TUN.Stack = "mixed"
-	out, err := (Compiler{Settings: s}).Compile([]byte("mode: rule\n"), nil, nil)
+	out, err := (Compiler{Settings: s}).Compile(CompileInput{Source: []byte("mode: rule\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +100,7 @@ func TestInheritLeavesNetworkConfig(t *testing.T) {
 	s := profile.DefaultSettings()
 	s.DNSManagement = "inherit"
 	s.TUNManagement = "inherit"
-	out, e := (Compiler{Settings: s}).Compile([]byte("dns:\n  enable: false\ntun:\n  enable: false\n"), nil, nil)
+	out, e := (Compiler{Settings: s}).Compile(CompileInput{Source: []byte("dns:\n  enable: false\ntun:\n  enable: false\n")})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -108,5 +110,55 @@ func TestInheritLeavesNetworkConfig(t *testing.T) {
 	}
 	if strings.Contains(text, "198.18.0.1/16") {
 		t.Fatal("managed DNS leaked into inherit mode")
+	}
+}
+
+func TestCompileLayersCustomRulesWithoutReplacingSourceRules(t *testing.T) {
+	source := []byte(`mode: rule
+proxy-groups:
+  - name: Select
+    type: select
+rules:
+  - GEOIP,CN,DIRECT
+  - MATCH,Select
+`)
+	global := []byte("log-level: warning\n")
+	profileOverride := []byte("allow-lan: true\n")
+	custom := []rules.Rule{
+		{Enabled: true, Match: rules.Match{Type: rules.DomainSuffix, Value: "openai.com"}, Policy: rules.Direct},
+		{Enabled: true, Match: rules.Match{Type: rules.Domain, Value: "example.com"}, Policy: rules.Proxy},
+	}
+	out, err := (Compiler{}).Compile(CompileInput{
+		Source: source, GlobalOverride: global, ProfileOverride: profileOverride,
+		CustomRules: custom, Bindings: policy.Bindings{policy.Proxy: "Select"},
+		Settings: profile.Settings{DNSManagement: "inherit", TUNManagement: "inherit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled["log-level"] != "warning" || compiled["allow-lan"] != true {
+		t.Fatalf("override layers were not applied: %#v", compiled)
+	}
+	gotRules, ok := compiled["rules"].([]any)
+	if !ok {
+		t.Fatalf("compiled rules are not an array: %#v", compiled["rules"])
+	}
+	want := []any{
+		"DOMAIN-SUFFIX,openai.com,DIRECT",
+		"DOMAIN,example.com,Select",
+		"GEOIP,CN,DIRECT",
+		"MATCH,Select",
+	}
+	if len(gotRules) != len(want) {
+		t.Fatalf("compiled rules length = %d, want %d: %#v", len(gotRules), len(want), gotRules)
+	}
+	for i := range want {
+		if gotRules[i] != want[i] {
+			t.Fatalf("compiled rule %d = %#v, want %#v", i, gotRules[i], want[i])
+		}
 	}
 }

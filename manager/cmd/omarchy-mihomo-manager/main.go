@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -14,7 +16,9 @@ import (
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/core"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/doctor"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/fetcher"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/policy"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/rules"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/store"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/validator"
 )
@@ -22,22 +26,34 @@ import (
 var st = store.New()
 
 type response struct {
-	OK      bool   `json:"ok"`
-	Stage   string `json:"stage,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Message string `json:"message,omitempty"`
-	Data    any    `json:"data,omitempty"`
+	OK         bool     `json:"ok"`
+	Stage      string   `json:"stage,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	Code       string   `json:"code,omitempty"`
+	Policy     string   `json:"policy,omitempty"`
+	ProfileID  string   `json:"profileId,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+	Data       any      `json:"data,omitempty"`
 }
 
 func emit(v any) { _ = json.NewEncoder(os.Stdout).Encode(v) }
 func ok(v any)   { emit(response{OK: true, Data: v}) }
 func fail(stage string, err error) {
+	var bindingErr *policy.BindingError
+	_ = errors.As(err, &bindingErr)
 	message := err.Error()
 	// Keep stdout machine-readable for QML, while retaining a useful
 	// diagnostic for interactive callers. Never print raw command arguments
 	// here: fetcher/core errors are expected to redact subscription URLs.
 	fmt.Fprintf(os.Stderr, "omarchy-mihomo-manager: %s: %s\n", stage, message)
-	emit(response{OK: false, Stage: stage, Error: message})
+	if bindingErr != nil {
+		emit(response{OK: false, Stage: stage, Error: message, Code: bindingErr.Code,
+			Policy: bindingErr.Policy, ProfileID: bindingErr.ProfileID,
+			Candidates: bindingErr.Candidates, Message: message})
+	} else {
+		emit(response{OK: false, Stage: stage, Error: message})
+	}
 	os.Exit(1)
 }
 func runLocked(fn func() error) error {
@@ -70,6 +86,10 @@ func main() {
 		settingsCommand(args[1:])
 	case "override":
 		overrideCommand(args[1:])
+	case "rule":
+		ruleCommand(args[1:])
+	case "policy":
+		policyCommand(args[1:])
 	case "doctor":
 		if len(args) > 1 && args[1] == "tun" {
 			doctorTUN(args[2:])
@@ -358,12 +378,18 @@ func addProfile(args []string) {
 		var oldState []byte
 		var hadState bool
 		var oldRuntime runtimeSnapshot
+		var oldBinding []byte
+		var hadBinding bool
 		if activate {
 			oldState, hadState, err = snapshot(st.StatePath())
 			if err != nil {
 				return err
 			}
 			oldRuntime, err = snapshotRuntime()
+			if err != nil {
+				return err
+			}
+			oldBinding, hadBinding, err = snapshot(st.BindingsPath(id))
 			if err != nil {
 				return err
 			}
@@ -380,6 +406,16 @@ func addProfile(args []string) {
 		idx.Profiles = append(idx.Profiles, id)
 		if activate {
 			if err = applyLocked(id, meta, result.Body); err != nil {
+				var bindingErr *policy.BindingError
+				if errors.As(err, &bindingErr) {
+					// Keep a valid, inactive profile when the first profile
+					// needs a human proxy-group choice. The UI can save the
+					// binding and retry select without downloading again.
+					if saveErr := profile.SaveIndex(st, idx); saveErr != nil {
+						return rollbackErrors(err, saveErr)
+					}
+					committed = true
+				}
 				return err
 			}
 			idx.ActiveProfile = id
@@ -388,8 +424,9 @@ func addProfile(args []string) {
 			if activate {
 				runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
 				stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+				bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
 				indexErr := profile.SaveIndex(st, oldIndex)
-				return rollbackErrors(err, runtimeErr, stateErr, indexErr)
+				return rollbackErrors(err, runtimeErr, stateErr, bindingErr, indexErr)
 			}
 			return err
 		}
@@ -528,6 +565,10 @@ func selectProfile(id string) {
 		if err != nil {
 			return err
 		}
+		oldBinding, hadBinding, err := snapshot(st.BindingsPath(id))
+		if err != nil {
+			return err
+		}
 		if err := applyLocked(id, meta, nil); err != nil {
 			return err
 		}
@@ -536,8 +577,9 @@ func selectProfile(id string) {
 			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
 			indexErr := profile.SaveIndex(st, oldIndex)
 			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
-			if runtimeErr != nil || indexErr != nil || stateErr != nil {
-				return rollbackErrors(err, runtimeErr, indexErr, stateErr)
+			bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+			if runtimeErr != nil || indexErr != nil || stateErr != nil || bindingErr != nil {
+				return rollbackErrors(err, runtimeErr, indexErr, stateErr, bindingErr)
 			}
 			return err
 		}
@@ -705,17 +747,29 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 		if readErr != nil {
 			return operationFailure{"store", readErr}
 		}
+		oldBinding, hadBinding, bindingSnapshotErr := snapshot(st.BindingsPath(id))
+		if bindingSnapshotErr != nil {
+			return operationFailure{"store", bindingSnapshotErr}
+		}
 		if !active {
 			candidate, compileErr := compile(id, result.Body)
 			if compileErr != nil {
+				bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
 				if saveErr := profile.SaveMeta(st, profile.SetError(currentMeta, compileErr)); saveErr != nil {
-					return operationFailure{"rollback", rollbackErrors(compileErr, saveErr)}
+					return operationFailure{"rollback", rollbackErrors(compileErr, bindingErr, saveErr)}
+				}
+				if bindingErr != nil {
+					return operationFailure{"rollback", rollbackErrors(compileErr, bindingErr)}
 				}
 				return operationFailure{"compile", compileErr}
 			}
 			if validateErr := validateCandidate(candidate); validateErr != nil {
+				bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
 				if saveErr := profile.SaveMeta(st, profile.SetError(currentMeta, validateErr)); saveErr != nil {
-					return operationFailure{"rollback", rollbackErrors(validateErr, saveErr)}
+					return operationFailure{"rollback", rollbackErrors(validateErr, bindingErr, saveErr)}
+				}
+				if bindingErr != nil {
+					return operationFailure{"rollback", rollbackErrors(validateErr, bindingErr)}
 				}
 				return operationFailure{"validate", validateErr}
 			}
@@ -734,27 +788,36 @@ func updateProfile(id string, viaProxy bool) (map[string]any, error) {
 				return operationFailure{"apply", applyErr}
 			}
 			if writeErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), result.Body); writeErr != nil {
-				if rollbackErr := restoreAppliedRuntime(oldSource, id, oldState, hadState, oldRuntime); rollbackErr != nil {
-					return operationFailure{"rollback", fmt.Errorf("%w; rollback: %v", writeErr, rollbackErr)}
+				rollbackErr := restoreAppliedRuntime(oldSource, id, oldState, hadState, oldRuntime)
+				bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+				if rollbackErr != nil || bindingErr != nil {
+					return operationFailure{"rollback", rollbackErrors(writeErr, rollbackErr, bindingErr)}
 				}
 				return operationFailure{"store", writeErr}
 			}
 			if saveErr := profile.SaveMeta(st, newMeta); saveErr != nil {
 				sourceErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), oldSource)
 				rollbackErr := restoreAppliedRuntime(oldSource, id, oldState, hadState, oldRuntime)
-				if sourceErr != nil || rollbackErr != nil {
-					return operationFailure{"rollback", rollbackErrors(saveErr, rollbackErr, sourceErr)}
+				bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+				if sourceErr != nil || rollbackErr != nil || bindingErr != nil {
+					return operationFailure{"rollback", rollbackErrors(saveErr, rollbackErr, sourceErr, bindingErr)}
 				}
 				return operationFailure{"store", saveErr}
 			}
 			return nil
 		}
 		if writeErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), result.Body); writeErr != nil {
+			bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+			if bindingErr != nil {
+				return operationFailure{"rollback", rollbackErrors(writeErr, bindingErr)}
+			}
 			return operationFailure{"store", writeErr}
 		}
 		if saveErr := profile.SaveMeta(st, newMeta); saveErr != nil {
-			if restoreErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), oldSource); restoreErr != nil {
-				return operationFailure{"rollback", fmt.Errorf("%w; source rollback: %v", saveErr, restoreErr)}
+			sourceErr := st.WriteAtomic(st.ProfilePath(id, "source.yaml"), oldSource)
+			bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+			if sourceErr != nil || bindingErr != nil {
+				return operationFailure{"rollback", rollbackErrors(saveErr, sourceErr, bindingErr)}
 			}
 			return operationFailure{"store", saveErr}
 		}
@@ -907,25 +970,126 @@ func saveUpdatedSource(s *store.Store, id string, body []byte) error {
 	return s.WriteAtomic(s.ProfilePath(id, "source.yaml"), body)
 }
 
-func compile(id string, source []byte) ([]byte, error) {
+type compileOptions struct {
+	globalOverride  []byte
+	profileOverride []byte
+	customRules     []rules.Rule
+	customRulesSet  bool
+	bindings        policy.Bindings
+	bindingsSet     bool
+}
+
+type compilePlan struct {
+	compiled       []byte
+	bindings       policy.Bindings
+	bindingChanged bool
+}
+
+func readGlobalOverride() ([]byte, error) {
+	b, err := os.ReadFile(st.GlobalOverridePath())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return b, err
+}
+
+func prepareCompile(id string, source []byte, options compileOptions) (compilePlan, error) {
 	if source == nil {
 		var err error
 		source, err = profile.ReadSource(st, id)
 		if err != nil {
-			return nil, err
+			return compilePlan{}, err
 		}
 	}
-	override, err := profile.ReadOverride(st, id)
+	global := options.globalOverride
+	if global == nil {
+		var err error
+		global, err = readGlobalOverride()
+		if err != nil {
+			return compilePlan{}, err
+		}
+	}
+	override := options.profileOverride
+	if override == nil {
+		var err error
+		override, err = profile.ReadOverride(st, id)
+		if err != nil {
+			return compilePlan{}, err
+		}
+	}
+	custom := options.customRules
+	if !options.customRulesSet {
+		collection, err := rules.Load(st)
+		if err != nil {
+			return compilePlan{}, err
+		}
+		custom = collection.Rules
+	}
+	bindings := options.bindings
+	if !options.bindingsSet {
+		var err error
+		bindings, err = policy.Load(st, id)
+		if err != nil {
+			return compilePlan{}, err
+		}
+	}
+	if bindings == nil {
+		bindings = policy.Bindings{}
+	}
+	bindings = policy.Clone(bindings)
+	if rules.NeedsProxyBinding(custom) {
+		effective, err := config.MergeLayers(source, global, override)
+		if err != nil {
+			return compilePlan{}, err
+		}
+		target, changed, err := policy.ResolveProxyBinding(effective, bindings, id)
+		if err != nil {
+			return compilePlan{}, err
+		}
+		if changed {
+			bindings[policy.Proxy] = target
+		}
+		options.bindings = bindings
+		options.bindingsSet = true
+		plan, err := compileWithOptions(source, global, override, custom, bindings)
+		if err != nil {
+			return compilePlan{}, err
+		}
+		return compilePlan{compiled: plan, bindings: bindings, bindingChanged: changed}, nil
+	}
+	compiled, err := compileWithOptions(source, global, override, custom, bindings)
+	if err != nil {
+		return compilePlan{}, err
+	}
+	return compilePlan{compiled: compiled, bindings: bindings}, nil
+}
+
+func compileWithOptions(source, global, override []byte, custom []rules.Rule, bindings policy.Bindings) ([]byte, error) {
+	settings, err := profile.LoadSettings(st)
 	if err != nil {
 		return nil, err
 	}
-	global, err := os.ReadFile(st.GlobalOverridePath())
-	if os.IsNotExist(err) {
-		global = nil
-	} else if err != nil {
+	protected, err := protectedController()
+	if err != nil {
 		return nil, err
 	}
-	return compileBytes(source, global, override)
+	return (config.Compiler{}).Compile(config.CompileInput{
+		Source: source, GlobalOverride: global, ProfileOverride: override,
+		CustomRules: custom, Bindings: bindings, Settings: settings, Protected: protected,
+	})
+}
+
+func compile(id string, source []byte) ([]byte, error) {
+	plan, err := prepareCompile(id, source, compileOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if plan.bindingChanged {
+		if err := policy.Save(st, id, plan.bindings); err != nil {
+			return nil, err
+		}
+	}
+	return plan.compiled, nil
 }
 
 func loadRuntimeState() (store.RuntimeState, bool, error) {
@@ -979,7 +1143,10 @@ func compileBytes(source, global, override []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return (config.Compiler{Settings: settings, Protected: protected}).Compile(source, global, override)
+	return (config.Compiler{}).Compile(config.CompileInput{
+		Source: source, GlobalOverride: global, ProfileOverride: override,
+		Settings: settings, Protected: protected,
+	})
 }
 
 func validateCandidate(b []byte) error {
@@ -1013,6 +1180,10 @@ func validateCompiled(source, override []byte) error {
 }
 
 func applyLocked(id string, meta profile.Meta, source []byte) error {
+	return applyLockedWithOptions(id, meta, source, compileOptions{})
+}
+
+func applyLockedWithOptions(id string, meta profile.Meta, source []byte, options compileOptions) error {
 	oldState, hadState, err := snapshot(st.StatePath())
 	if err != nil {
 		return err
@@ -1021,10 +1192,15 @@ func applyLocked(id string, meta profile.Meta, source []byte) error {
 	if err != nil {
 		return err
 	}
-	b, err := compile(id, source)
+	oldBinding, hadBinding, err := snapshot(st.BindingsPath(id))
+	if err != nil {
+		return err
+	}
+	plan, err := prepareCompile(id, source, options)
 	if err != nil {
 		return fmt.Errorf("compile: %w", err)
 	}
+	b := plan.compiled
 	if err = st.WriteAtomic(st.CandidatePath(), b); err != nil {
 		return err
 	}
@@ -1046,13 +1222,19 @@ func applyLocked(id string, meta profile.Meta, source []byte) error {
 	restore := func(primary error) error {
 		runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
 		stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
-		if runtimeErr != nil || stateErr != nil {
-			return rollbackErrors(primary, runtimeErr, stateErr)
+		bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+		if runtimeErr != nil || stateErr != nil || bindingErr != nil {
+			return rollbackErrors(primary, runtimeErr, stateErr, bindingErr)
 		}
 		return primary
 	}
 	if err = core.Apply(st.CandidatePath()); err != nil {
 		return restore(fmt.Errorf("apply: %w", err))
+	}
+	if plan.bindingChanged {
+		if err = policy.Save(st, id, plan.bindings); err != nil {
+			return restore(fmt.Errorf("save policy binding: %w", err))
+		}
 	}
 	if err = st.WriteAtomic(st.CurrentPath(), b); err != nil {
 		return restore(fmt.Errorf("promote runtime: %w", err))
@@ -1220,22 +1402,50 @@ func overrideCommand(args []string) {
 	}
 	switch args[0] {
 	case "global":
-		b, err := os.ReadFile(st.GlobalOverridePath())
-		if os.IsNotExist(err) {
-			b = []byte("{}\n")
-		} else if err != nil {
-			fail("store", err)
+		if len(args) == 1 || args[1] == "get" {
+			b, err := readOverride(st.GlobalOverridePath())
+			if err != nil {
+				fail("store", err)
+			}
+			emit(map[string]any{"ok": true, "scope": "global", "override": string(b), "empty": overrideIsEmpty(b)})
+			return
 		}
-		emit(map[string]any{"ok": true, "scope": "global", "override": string(b)})
+		if args[1] == "set" || args[1] == "set-file" {
+			data, err := readOverrideInput(args[1:], 1)
+			if err != nil {
+				fail("args", err)
+			}
+			if err = setOverride("global", "", data); err != nil {
+				fail("apply", err)
+			}
+			ok(map[string]string{"scope": "global", "saved": "true"})
+			return
+		}
+		fail("args", fmt.Errorf("unknown global override command: %s", args[1]))
 	case "profile":
 		if len(args) < 2 || !store.ValidID(args[1]) {
 			fail("args", fmt.Errorf("valid profile id required"))
 		}
-		b, err := profile.ReadOverride(st, args[1])
-		if err != nil {
-			fail("store", err)
+		if len(args) == 2 || args[2] == "get" {
+			b, err := profile.ReadOverride(st, args[1])
+			if err != nil {
+				fail("store", err)
+			}
+			emit(map[string]any{"ok": true, "scope": "profile", "id": args[1], "override": string(b)})
+			return
 		}
-		emit(map[string]any{"ok": true, "scope": "profile", "id": args[1], "override": string(b)})
+		if args[2] == "set" || args[2] == "set-file" {
+			data, err := readOverrideInput(args[2:], 1)
+			if err != nil {
+				fail("args", err)
+			}
+			if err = setOverride("profile", args[1], data); err != nil {
+				fail("apply", err)
+			}
+			ok(map[string]string{"scope": "profile", "id": args[1], "saved": "true"})
+			return
+		}
+		fail("args", fmt.Errorf("unknown profile override command: %s", args[2]))
 	case "open-global":
 		openOverride(st.GlobalOverridePath())
 	case "open-profile":
@@ -1246,6 +1456,406 @@ func overrideCommand(args []string) {
 	default:
 		fail("args", fmt.Errorf("unknown override command: %s", args[0]))
 	}
+}
+
+func readOverride(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return []byte("{}\n"), nil
+	}
+	return b, err
+}
+
+func overrideIsEmpty(data []byte) bool {
+	parsed, err := config.Parse(data)
+	return err == nil && len(parsed) == 0
+}
+
+func readOverrideInput(args []string, index int) ([]byte, error) {
+	if len(args) > 0 && args[0] == "set-file" {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("set-file requires one path")
+		}
+		return os.ReadFile(args[1])
+	}
+	if len(args) <= index {
+		return nil, fmt.Errorf("override content source required (--stdin, --file, or --text)")
+	}
+	if args[index] == "--stdin" {
+		if len(args) != index+1 {
+			return nil, fmt.Errorf("--stdin does not accept extra arguments")
+		}
+		return io.ReadAll(os.Stdin)
+	}
+	if args[index] == "--file" {
+		if len(args) != index+2 {
+			return nil, fmt.Errorf("--file requires one path")
+		}
+		return os.ReadFile(args[index+1])
+	}
+	if args[index] == "--text" {
+		if len(args) != index+2 {
+			return nil, fmt.Errorf("--text requires one value")
+		}
+		return []byte(args[index+1]), nil
+	}
+	return nil, fmt.Errorf("override content source must be --stdin, --file, or --text")
+}
+
+func normalizedOverride(data []byte) ([]byte, error) {
+	parsed, err := config.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse override: %w", err)
+	}
+	if len(parsed) == 0 {
+		return []byte("{}\n"), nil
+	}
+	data = []byte(strings.TrimRight(string(data), "\n") + "\n")
+	return data, nil
+}
+
+func setOverride(scope, id string, data []byte) error {
+	normalized, err := normalizedOverride(data)
+	if err != nil {
+		return err
+	}
+	return runLocked(func() error {
+		path := st.GlobalOverridePath()
+		if scope == "profile" {
+			if !store.ValidID(id) {
+				return fmt.Errorf("valid profile id required")
+			}
+			path = st.ProfilePath(id, "override.yaml")
+		}
+		oldOverride, hadOverride, err := snapshot(path)
+		if err != nil {
+			return err
+		}
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			return err
+		}
+		activeID := idx.ActiveProfile
+		if scope == "profile" && activeID != id {
+			return st.WriteAtomic(path, normalized)
+		}
+		if activeID == "" {
+			return st.WriteAtomic(path, normalized)
+		}
+		meta, err := profile.LoadMeta(st, activeID)
+		if err != nil {
+			return err
+		}
+		oldState, hadState, err := snapshot(st.StatePath())
+		if err != nil {
+			return err
+		}
+		oldRuntime, err := snapshotRuntime()
+		if err != nil {
+			return err
+		}
+		oldBinding, hadBinding, err := snapshot(st.BindingsPath(activeID))
+		if err != nil {
+			return err
+		}
+		options := compileOptions{}
+		if scope == "global" {
+			options.globalOverride = normalized
+		} else {
+			options.profileOverride = normalized
+		}
+		if err = applyLockedWithOptions(activeID, meta, nil, options); err != nil {
+			return err
+		}
+		if err = st.WriteAtomic(path, normalized); err != nil {
+			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
+			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+			bindingErr := restoreSnapshot(st.BindingsPath(activeID), oldBinding, hadBinding)
+			overrideErr := restoreSnapshot(path, oldOverride, hadOverride)
+			return rollbackErrors(err, runtimeErr, stateErr, bindingErr, overrideErr)
+		}
+		return nil
+	})
+}
+
+func ruleCommand(args []string) {
+	if len(args) == 0 {
+		fail("args", fmt.Errorf("rule command required"))
+	}
+	switch args[0] {
+	case "list":
+		collection, err := rules.Load(st)
+		if err != nil {
+			fail("store", err)
+		}
+		ok(collection.Rules)
+	case "add":
+		item, err := parseRuleFlags("add", args[1:], rules.Rule{})
+		if err != nil {
+			fail("args", err)
+		}
+		collection, err := mutateRules(func(candidate *rules.Collection) error {
+			for _, existing := range candidate.Rules {
+				if rules.Key(existing) == rules.Key(item) {
+					return fmt.Errorf("duplicate rule for %s", item.Match.Value)
+				}
+			}
+			candidate.Rules = append(candidate.Rules, item)
+			return nil
+		})
+		if err != nil {
+			failOperation("apply", err)
+		}
+		_, added, _ := rules.Find(collection, item.ID)
+		ok(map[string]any{"rule": added})
+	case "update":
+		if len(args) < 2 || !store.ValidID(args[1]) {
+			fail("args", fmt.Errorf("valid rule id required"))
+		}
+		var updated rules.Rule
+		collection, err := mutateRules(func(candidate *rules.Collection) error {
+			index, current, found := rules.Find(*candidate, args[1])
+			if !found {
+				return fmt.Errorf("rule not found")
+			}
+			item, parseErr := parseRuleFlags("update", args[2:], current)
+			if parseErr != nil {
+				return parseErr
+			}
+			item.ID = current.ID
+			item.CreatedAt = current.CreatedAt
+			candidate.Rules[index] = item
+			updated = item
+			return nil
+		})
+		if err != nil {
+			failOperation("apply", err)
+		}
+		if updated.ID == "" {
+			_, updated, _ = rules.Find(collection, args[1])
+		}
+		ok(map[string]any{"rule": updated})
+	case "delete", "enable", "disable":
+		if len(args) != 2 || !store.ValidID(args[1]) {
+			fail("args", fmt.Errorf("valid rule id required"))
+		}
+		collection, err := mutateRules(func(candidate *rules.Collection) error {
+			index, _, found := rules.Find(*candidate, args[1])
+			if !found {
+				return fmt.Errorf("rule not found")
+			}
+			if args[0] == "delete" {
+				candidate.Rules = append(candidate.Rules[:index], candidate.Rules[index+1:]...)
+			} else {
+				candidate.Rules[index].Enabled = args[0] == "enable"
+			}
+			return nil
+		})
+		if err != nil {
+			failOperation("apply", err)
+		}
+		ok(collection)
+	default:
+		fail("args", fmt.Errorf("unknown rule command: %s", args[0]))
+	}
+}
+
+func parseRuleFlags(name string, args []string, current rules.Rule) (rules.Rule, error) {
+	fs := flag.NewFlagSet("rule "+name, flag.ContinueOnError)
+	domain := fs.String("domain", current.Match.Value, "domain")
+	matchType := fs.String("match", current.Match.Type, "match type")
+	policyName := fs.String("policy", current.Policy, "policy")
+	if err := fs.Parse(args); err != nil {
+		return rules.Rule{}, err
+	}
+	if fs.NArg() != 0 {
+		return rules.Rule{}, fmt.Errorf("unexpected rule argument: %s", fs.Arg(0))
+	}
+	if name == "add" && strings.TrimSpace(*domain) == "" {
+		return rules.Rule{}, fmt.Errorf("--domain is required")
+	}
+	item, err := rules.New(*domain, *matchType, *policyName)
+	if err != nil {
+		return rules.Rule{}, err
+	}
+	item.Enabled = current.ID == "" || current.Enabled
+	if current.ID != "" {
+		item.ID = current.ID
+	}
+	return item, nil
+}
+
+func failOperation(stage string, err error) {
+	// Preserve structured binding errors through the same CLI error contract used
+	// by profile/apply transactions.
+	fail(stage, err)
+}
+
+func mutateRules(mutator func(*rules.Collection) error) (rules.Collection, error) {
+	var result rules.Collection
+	err := runLocked(func() error {
+		oldRules, hadRules, err := snapshot(st.CustomRulesPath())
+		if err != nil {
+			return err
+		}
+		collection, err := rules.Load(st)
+		if err != nil {
+			return err
+		}
+		candidate := rules.Clone(collection)
+		if err := mutator(&candidate); err != nil {
+			return err
+		}
+		candidate, err = rules.NormalizeCollection(candidate)
+		if err != nil {
+			return err
+		}
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			return err
+		}
+		if idx.ActiveProfile == "" {
+			if err := rules.Save(st, candidate); err != nil {
+				return err
+			}
+			result = candidate
+			return nil
+		}
+		meta, err := profile.LoadMeta(st, idx.ActiveProfile)
+		if err != nil {
+			return err
+		}
+		oldState, hadState, err := snapshot(st.StatePath())
+		if err != nil {
+			return err
+		}
+		oldRuntime, err := snapshotRuntime()
+		if err != nil {
+			return err
+		}
+		oldBinding, hadBinding, err := snapshot(st.BindingsPath(idx.ActiveProfile))
+		if err != nil {
+			return err
+		}
+		if err := applyLockedWithOptions(idx.ActiveProfile, meta, nil, compileOptions{
+			customRules: candidate.Rules, customRulesSet: true,
+		}); err != nil {
+			return err
+		}
+		if err := rules.Save(st, candidate); err != nil {
+			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
+			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+			bindingErr := restoreSnapshot(st.BindingsPath(idx.ActiveProfile), oldBinding, hadBinding)
+			rulesErr := restoreSnapshot(st.CustomRulesPath(), oldRules, hadRules)
+			return rollbackErrors(err, runtimeErr, stateErr, bindingErr, rulesErr)
+		}
+		result = candidate
+		return nil
+	})
+	return result, err
+}
+
+func policyCommand(args []string) {
+	if len(args) < 2 || args[0] != "binding" {
+		fail("args", fmt.Errorf("policy binding command required"))
+	}
+	if len(args) < 3 || !store.ValidID(args[2]) {
+		fail("args", fmt.Errorf("valid profile id required"))
+	}
+	id := args[2]
+	switch args[1] {
+	case "get":
+		bindings, err := policy.Load(st, id)
+		if err != nil {
+			fail("store", err)
+		}
+		ok(map[string]any{"profileId": id, "bindings": bindings})
+	case "candidates":
+		configMap, err := effectiveConfig(id)
+		if err != nil {
+			fail("compile", err)
+		}
+		ok(map[string]any{"profileId": id, "candidates": policy.Candidates(configMap)})
+	case "set":
+		if len(args) != 5 || args[3] != policy.Proxy || strings.TrimSpace(args[4]) == "" {
+			fail("args", fmt.Errorf("policy binding set <profile-id> proxy <group> required"))
+		}
+		if err := setPolicyBinding(id, args[3], args[4]); err != nil {
+			fail("apply", err)
+		}
+		ok(map[string]any{"profileId": id, "policy": args[3], "target": args[4]})
+	default:
+		fail("args", fmt.Errorf("unknown policy binding command: %s", args[1]))
+	}
+}
+
+func effectiveConfig(id string) (map[string]any, error) {
+	source, err := profile.ReadSource(st, id)
+	if err != nil {
+		return nil, err
+	}
+	override, err := profile.ReadOverride(st, id)
+	if err != nil {
+		return nil, err
+	}
+	global, err := readGlobalOverride()
+	if err != nil {
+		return nil, err
+	}
+	return config.MergeLayers(source, global, override)
+}
+
+func setPolicyBinding(id, policyName, target string) error {
+	if policyName != policy.Proxy {
+		return fmt.Errorf("only the proxy policy can be bound")
+	}
+	configMap, err := effectiveConfig(id)
+	if err != nil {
+		return err
+	}
+	if err := policy.ValidateTarget(configMap, target); err != nil {
+		return err
+	}
+	return runLocked(func() error {
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			return err
+		}
+		oldBinding, hadBinding, err := snapshot(st.BindingsPath(id))
+		if err != nil {
+			return err
+		}
+		bindings, err := policy.Load(st, id)
+		if err != nil {
+			return err
+		}
+		bindings[policyName] = strings.TrimSpace(target)
+		if idx.ActiveProfile != id {
+			return policy.Save(st, id, bindings)
+		}
+		meta, err := profile.LoadMeta(st, id)
+		if err != nil {
+			return err
+		}
+		oldState, hadState, err := snapshot(st.StatePath())
+		if err != nil {
+			return err
+		}
+		oldRuntime, err := snapshotRuntime()
+		if err != nil {
+			return err
+		}
+		if err := applyLockedWithOptions(id, meta, nil, compileOptions{bindings: bindings, bindingsSet: true}); err != nil {
+			return err
+		}
+		if err := policy.Save(st, id, bindings); err != nil {
+			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
+			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+			bindingErr := restoreSnapshot(st.BindingsPath(id), oldBinding, hadBinding)
+			return rollbackErrors(err, runtimeErr, stateErr, bindingErr)
+		}
+		return nil
+	})
 }
 func openOverride(path string) {
 	if _, err := os.Stat(path); err != nil {

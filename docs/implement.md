@@ -2159,6 +2159,90 @@ TUN 统一写作「TUN（虚拟网卡）」
 未连接、更新失败、校验失败、重载失败均有明确可操作的提示
 ```
 
+---
+
+# 四十一、Phase 2 实施记录：产品收敛与全局路由
+
+Phase 2 已按“产品层简化、业务层独立、运行时事务不退化”的原则落地。
+
+## 已实现
+
+```text
+固定导航：Home / Profiles / Proxies / Connections / Rules / Config
+Diagnostics：保留为错误卡片和内部页面入口，不放入侧栏
+Home：隐藏正常状态下的 controller、端口和网络原理说明
+Config：Running Configuration / Network / Advanced Core Details 分层展示
+Profiles：Global Override 与 Global Custom Rules 统一放在 Global Configuration
+Rules：My Rules 管理全局规则，Effective Rules 仅在搜索后渲染
+Policy：Proxy / Direct / Reject；Proxy binding 按配置档案保存
+```
+
+Global Override 由 manager 负责解析、编译、校验、应用和持久化。保存失败时会恢复旧的
+override、运行时文件、运行时状态以及自动生成的 binding；没有 active profile 时只解析并
+保存，不要求先启用配置档案。
+
+全局自定义规则独立保存于：
+
+```text
+~/.config/omarchy-mihomo/custom-rules.json
+~/.config/omarchy-mihomo/profiles/<id>/bindings.json
+```
+
+编译顺序为：
+
+```text
+Source → Global Override → Profile Override → Custom Rules
+       → Managed DNS/TUN → Protected controller fields
+```
+
+Custom Rules 会插入现有 `rules` 数组之前，不会写入 `override.yaml`，也不会替换订阅原有
+规则。数组仍遵循既有的 whole-array replacement 语义。规则输入会统一 trim、转小写、提取
+URL 主机名、移除 `*.` 和结尾句点；当前只支持 `domain-suffix`、`domain` 以及 Proxy、
+Direct、Reject 三种策略。
+
+Proxy binding 的解析规则是：没有可用代理组返回 `binding_unavailable`；只有一个候选或只有
+一个 Selector 时自动保存；存在多个候选时返回 `binding_required`，由 UI 要求用户选择。
+订阅更新发现已保存的代理组失效时，在新 source、runtime 和 metadata 提交前失败，旧配置
+继续保持工作状态。规则是全局的，binding 是每个 profile 独立的。
+
+## Phase 2 CLI
+
+```bash
+mihomo-manager override global get
+mihomo-manager override global set --stdin
+mihomo-manager override profile <id> get
+mihomo-manager override profile <id> set --stdin
+mihomo-manager rule list
+mihomo-manager rule add --domain openai.com --match domain-suffix --policy proxy
+mihomo-manager rule update <rule-id> --policy direct
+mihomo-manager rule enable <rule-id>
+mihomo-manager rule disable <rule-id>
+mihomo-manager rule delete <rule-id>
+mihomo-manager policy binding get <profile-id>
+mihomo-manager policy binding candidates <profile-id>
+mihomo-manager policy binding set <profile-id> proxy "Proxy group"
+```
+
+## 明确延后
+
+本阶段没有加入 Rule Provider 管理、IP/process 规则、per-profile custom rules、自定义
+Logical Policy、拖拽排序、完整 YAML 图形化编辑器、Diagnostics 侧栏、bootstrap 重构或
+manager 大规模拆分。这些边界用于保持普通用户主路径简单，并避免破坏已有 core lifecycle。
+
+## Phase 2 验证
+
+除现有单元测试外，`tests/integration.sh` 覆盖了全局规则前置、Direct/Proxy 目标、规则
+启停、A/B profile 独立 binding、binding_required、stale binding 安全失败，以及 override
+Save & Apply 的回滚行为。发布前还应执行：
+
+```bash
+cd manager && go test ./...
+cd .. && go vet ./manager/...
+./tests/integration.sh
+./tests/validate-plugin.sh
+omarchy plugin validate .
+```
+
 [1]: https://github.com/ZainCheung/omarchy-mihomo-plugin "GitHub - ZainCheung/omarchy-mihomo-plugin: Omarchy status-bar plugin for a standalone mihomo core · GitHub"
 [2]: https://github.com/ZainCheung/omarchy-mihomo-plugin/blob/main/manifest.json "omarchy-mihomo-plugin/manifest.json at main · ZainCheung/omarchy-mihomo-plugin · GitHub"
 [3]: https://github.com/Clash-Verge-rev/clash-verge-rev?utm_source=chatgpt.com "GitHub - clash-verge-rev/clash-verge-rev: A modern GUI client based on Tauri, designed to run in Windows, macOS and Linux for tailored proxy experience · GitHub"

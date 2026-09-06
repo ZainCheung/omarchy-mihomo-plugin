@@ -79,9 +79,20 @@ Item {
   property bool profileOverrideLoading: false
   property var profileOverrideCallback: null
   property string globalOverrideText: ""
+  property bool globalOverrideEmpty: true
   property bool globalOverrideLoading: false
   property var globalOverrideCallback: null
+  property var overrideSaveCallback: null
+  property bool overrideSavePending: false
   property bool profileSourceLoading: false
+
+  property var customRules: []
+  property bool customRulesLoading: false
+  property bool bindingRequired: false
+  property var bindingRequiredCandidates: []
+  property string bindingRequiredProfileId: ""
+  property string bindingRequiredPolicy: ""
+  property var pendingManagerActionAfterBinding: null
 
   // Set by the panel. Drives poll cadence and the streaming subscriptions.
   property bool active: false
@@ -366,6 +377,12 @@ Item {
     profileProc.running = true
   }
 
+  function refreshGlobalOverride() {
+    if (!ready || !managerInstalled || globalOverrideProc.running) return
+    globalOverrideLoading = true
+    globalOverrideProc.running = true
+  }
+
   function refreshManagerSettings() {
     if (!ready || !managerInstalled || managerSettingsProc.running) return
     managerSettingsLoading = true
@@ -592,6 +609,23 @@ Item {
     globalOverrideProc.running = true
   }
 
+  function saveOverride(globalScope, id, text, callback) {
+    if (!ready || !managerInstalled || overrideSavePending) return
+    overrideSavePending = true
+    overrideSaveCallback = callback
+    var args = ["override"]
+    if (globalScope) {
+      args = args.concat(["global", "set", "--text", String(text || "")])
+    } else if (id) {
+      args = args.concat(["profile", id, "set", "--text", String(text || "")])
+    } else {
+      overrideSavePending = false
+      overrideSaveCallback = null
+      return
+    }
+    enqueueManager(args)
+  }
+
   function openGlobalOverride() {
     if (!ready || !managerInstalled || overrideOpenProc.running) return
     overrideOpenProc.command = ["/usr/bin/bash", managerRunner, "override", "open-global"]
@@ -609,6 +643,43 @@ Item {
   function recompileActiveProfile() {
     if (!managerInstalled || activeProfile === "") return
     enqueueManager(["config", "apply", activeProfile])
+  }
+
+  function refreshCustomRules() {
+    if (!ready || !managerInstalled || customRulesProc.running) return
+    customRulesLoading = true
+    customRulesProc.running = true
+  }
+
+  function addCustomRule(domain, matchType, policyName) {
+    enqueueManager(["rule", "add", "--domain", String(domain || ""),
+                    "--match", String(matchType || "domain-suffix"),
+                    "--policy", String(policyName || "proxy")])
+  }
+
+  function updateCustomRule(id, domain, matchType, policyName) {
+    var args = ["rule", "update", id]
+    if (domain !== undefined && domain !== null) args.push("--domain", String(domain))
+    if (matchType !== undefined && matchType !== null) args.push("--match", String(matchType))
+    if (policyName !== undefined && policyName !== null) args.push("--policy", String(policyName))
+    enqueueManager(args)
+  }
+
+  function deleteCustomRule(id) { enqueueManager(["rule", "delete", id]) }
+  function enableCustomRule(id) { enqueueManager(["rule", "enable", id]) }
+  function disableCustomRule(id) { enqueueManager(["rule", "disable", id]) }
+
+  function setPolicyBinding(profileId, policyName, target) {
+    if (!profileId || !policyName || !target) return
+    enqueueManager(["policy", "binding", "set", profileId, policyName, target])
+  }
+
+  function clearBindingRequired() {
+    pendingManagerActionAfterBinding = null
+    bindingRequired = false
+    bindingRequiredCandidates = []
+    bindingRequiredProfileId = ""
+    bindingRequiredPolicy = ""
   }
 
   // --- reads ---------------------------------------------------------------
@@ -639,8 +710,15 @@ Item {
   }
 
   function refreshPage() {
-    if (page === "config") refreshConfig()
-    else if (page === "rules") refreshRules()
+    if (page === "profiles") {
+      refreshProfiles()
+      refreshGlobalOverride()
+      refreshCustomRules()
+    } else if (page === "config") refreshConfig()
+    else if (page === "rules") {
+      refreshRules()
+      refreshCustomRules()
+    }
     else if (page === "connections") refreshConnections()
     else if (page === "diagnostics") refreshDiagnostics()
     else refresh()
@@ -837,6 +915,17 @@ Item {
     } catch (e) {
       // Leave the previous list in place rather than blanking the page.
     }
+  }
+
+  function applyCustomRules(raw) {
+    customRulesLoading = false
+    try {
+      var data = JSON.parse(raw)
+      if (!data.ok) return
+      var next = data.data || []
+      if (!Array.isArray(next) && next.rules !== undefined) next = next.rules
+      if (Array.isArray(next)) customRules = next
+    } catch (e) {}
   }
 
   function applyConnections(raw) {
@@ -1169,6 +1258,34 @@ Item {
       return text
     }
     return text
+  }
+
+  function applyManagerError(raw, failedAction) {
+    bindingRequired = false
+    bindingRequiredCandidates = []
+    bindingRequiredProfileId = ""
+    bindingRequiredPolicy = ""
+    try {
+      var data = JSON.parse(String(raw || ""))
+      if (data.code === "binding_required" || data.code === "binding_unavailable") {
+        bindingRequired = true
+        bindingRequiredCandidates = data.candidates || []
+        bindingRequiredProfileId = String(data.profileId || activeProfile || "")
+        bindingRequiredPolicy = String(data.policy || "proxy")
+        var pending = failedAction ? failedAction.slice() : null
+        // A first profile can be stored as inactive when its Proxy policy
+        // needs a human group choice. Retry selection after binding instead
+        // of repeating the download and creating a second profile.
+        if (pending && pending.length >= 2 && pending[0] === "profile"
+            && pending[1] === "add" && bindingRequiredProfileId !== "")
+          pending = ["profile", "select", bindingRequiredProfileId]
+        pendingManagerActionAfterBinding = pending
+      } else {
+        pendingManagerActionAfterBinding = null
+      }
+    } catch (e) {
+      pendingManagerActionAfterBinding = null
+    }
   }
 
   function syncManagedConfigInfo() {
@@ -1558,7 +1675,7 @@ Item {
 
   Process {
     id: globalOverrideProc
-    command: ["/usr/bin/bash", root.managerRunner, "override", "global"]
+    command: ["/usr/bin/bash", root.managerRunner, "override", "global", "get"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1566,6 +1683,7 @@ Item {
         try {
           var data = JSON.parse(text)
           root.globalOverrideText = data.ok ? String(data.override || "") : String(data.error || "")
+          root.globalOverrideEmpty = data.ok ? data.empty === true : true
         } catch (e) { root.globalOverrideText = root.t("parseError") }
         if (root.globalOverrideCallback) root.globalOverrideCallback(root.globalOverrideText)
         root.globalOverrideCallback = null
@@ -1575,6 +1693,16 @@ Item {
       root.globalOverrideLoading = false
       if (exitCode !== 0) root.globalOverrideCallback = null
     }
+  }
+
+  Process {
+    id: customRulesProc
+    command: ["/usr/bin/bash", root.managerRunner, "rule", "list"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyCustomRules(text)
+    }
+    onExited: root.customRulesLoading = false
   }
 
   Process {
@@ -1685,24 +1813,49 @@ Item {
       var output = root.managerOutput !== "" ? root.managerOutput : managerOut.text
       var failure = exitCode !== 0 ? root.actionErrorMessage(output) : ""
       if (exitCode !== 0) {
+        root.applyManagerError(output, finishedAction)
         if (failure === "") failure = root.t("actionFailed")
         root.managerFailureMessage = failure
         root.profileError = failure
         root.notice = failure
       } else {
+        if (finishedAction.length > 0 && finishedAction[0] === "policy") {
+          root.bindingRequired = false
+          root.bindingRequiredCandidates = []
+          root.bindingRequiredProfileId = ""
+          root.bindingRequiredPolicy = ""
+        }
         root.managerFailureMessage = ""
         root.profileError = ""
         root.notice = root.t("profileActionCompleted")
+      }
+      if (finishedAction.length > 0 && finishedAction[0] === "override") {
+        var saveCallback = root.overrideSaveCallback
+        root.overrideSaveCallback = null
+        root.overrideSavePending = false
+        if (saveCallback) saveCallback(exitCode === 0, exitCode === 0 ? "" : failure)
       }
       root.profileMutating = false
       if (finishedAction.length > 0 && finishedAction[0] === "reconcile") root.managerReconcilePending = false
       if (finishedAction.length > 0 && finishedAction[0] === "config") root.configReloading = false
       root.managerCurrentAction = []
       root.runNextManagerAction()
+      if (exitCode === 0 && finishedAction.length > 0 && finishedAction[0] === "policy"
+          && root.pendingManagerActionAfterBinding !== null) {
+        var pending = root.pendingManagerActionAfterBinding
+        root.pendingManagerActionAfterBinding = null
+        root.enqueueManager(pending)
+      }
       if (finishedAction.length > 0 && finishedAction[0] === "settings")
         root.managerSettingsMutating = root.managerActionPending("settings")
       root.refreshProfiles()
       root.refreshManagerSettings()
+      if (finishedAction.length > 0 && (finishedAction[0] === "rule" || finishedAction[0] === "policy"))
+        root.refreshCustomRules()
+      if (finishedAction.length > 0 && finishedAction[0] === "override") {
+        root.refreshGlobalOverride()
+        root.refresh(true)
+      }
       if (finishedAction.length > 0 && finishedAction[0] === "config") root.refreshConfigInfo()
     }
   }

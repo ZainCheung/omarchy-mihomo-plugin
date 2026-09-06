@@ -22,9 +22,6 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property string page: "home"
-  property bool advancedNavigation: false
-
-  readonly property var advancedPages: ["config", "connections", "rules", "diagnostics"]
 
   readonly property bool connected: svc ? svc.connected : false
   readonly property string modeLabel: svc ? svc.modeLabel : "--"
@@ -41,16 +38,12 @@ Panel {
     if (page !== target) page = target
   }
 
-  function isAdvancedPage(target) {
-    return advancedPages.indexOf(target) >= 0
-  }
-
   function scrollCurrent(amount) {
     if (currentPage && typeof currentPage.scrollBy === "function") currentPage.scrollBy(amount)
   }
 
   function cyclePage(direction) {
-    var order = ["home", "profiles", "proxies", "config", "connections", "rules", "diagnostics"]
+    var order = ["home", "profiles", "proxies", "connections", "rules", "config"]
     var index = order.indexOf(page)
     if (index < 0) index = 0
     page = order[(index + direction + order.length) % order.length]
@@ -73,6 +66,15 @@ Panel {
     property: "page"
     value: root.page
     when: root.svc !== null && root.svc !== undefined
+  }
+
+  // Binding choices can be requested by profile selection as well as by the
+  // Rules page, so keep the dialog outside page-specific content.
+  BindingDialog {
+    id: bindingDialog
+    svc: root.svc
+    foreground: root.fg
+    fontFamily: root.fontFamily
   }
 
   IpcHandler {
@@ -179,7 +181,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
 
-      // A focused filter field owns every key, including j/k/1-5.
+      // A focused filter field owns every key, including j/k/1-6.
       blocked: root.currentPage !== null && root.currentPage.editing === true
 
       onCloseRequested: root.close()
@@ -192,10 +194,9 @@ Panel {
         if (text === "1") root.goto("home")
         else if (text === "2") root.goto("profiles")
         else if (text === "3") root.goto("proxies")
-        else if (text === "4") root.goto("config")
-        else if (text === "5") root.goto("connections")
-        else if (text === "6") root.goto("rules")
-        else if (text === "7") root.goto("diagnostics")
+        else if (text === "4") root.goto("connections")
+        else if (text === "5") root.goto("rules")
+        else if (text === "6") root.goto("config")
         else if (text === "r" && root.svc) root.svc.refreshPage()
         else if (text === "/" && root.currentPage
                  && typeof root.currentPage.focusFilter === "function")
@@ -273,50 +274,9 @@ Panel {
           NavButton { width: parent.width; pageId: "home";        glyph: "󰋜"; title: root.svc ? root.svc.t("navHome") : "Home" }
           NavButton { width: parent.width; pageId: "profiles";    glyph: "󰈙"; title: root.svc ? root.svc.t("navProfiles") : "Profiles" }
           NavButton { width: parent.width; pageId: "proxies";     glyph: "󰖟"; title: root.svc ? root.svc.t("navProxies") : "Proxies" }
-          Rectangle {
-            width: parent.width
-            height: Style.space(34)
-            radius: Style.cornerRadius
-            color: advancedMouse.containsMouse ? Util.alpha(root.fg, 0.07) : "transparent"
-
-            MouseArea {
-              id: advancedMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.advancedNavigation = !root.advancedNavigation
-            }
-
-            Text {
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.advancedNavigation ? "▾" : "▸"
-              color: Util.alpha(root.fg, 0.7)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              renderType: Text.NativeRendering
-            }
-
-            Text {
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(32)
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(6)
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.svc ? root.svc.t("advancedControls") : "Advanced"
-              textFormat: Text.PlainText
-              color: Util.alpha(root.fg, 0.85)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              renderType: Text.NativeRendering
-            }
-          }
-
-          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "config"; height: visible ? Style.space(34) : 0; pageId: "config";      glyph: "󰘚"; title: root.svc ? root.svc.t("navConfig") : "Config" }
-          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "connections"; height: visible ? Style.space(34) : 0; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
-          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "rules";       height: visible ? Style.space(34) : 0; pageId: "rules";       glyph: "󰘬"; title: root.svc ? root.svc.t("navRules") : "Rules" }
-          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "diagnostics"; height: visible ? Style.space(34) : 0; pageId: "diagnostics"; glyph: "󰒡"; title: root.svc ? root.svc.t("navDiagnostics") : "Diagnostics" }
+          NavButton { width: parent.width; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
+          NavButton { width: parent.width; pageId: "rules";       glyph: "󰘬"; title: root.svc ? root.svc.t("navRules") : "Rules" }
+          NavButton { width: parent.width; pageId: "config";      glyph: "󰘚"; title: root.svc ? root.svc.t("navConfig") : "Config" }
         }
 
         Column {
@@ -386,6 +346,7 @@ Panel {
           anchors.fill: parent
           visible: root.page === "profiles"
           svc: root.svc
+          openRules: function() { root.goto("rules") }
           fg: root.fg
           fontFamily: root.fontFamily
         }
@@ -486,10 +447,6 @@ Panel {
 
   onOpenedChanged: {
     if (opened && svc) svc.refreshPage()
-  }
-
-  onPageChanged: {
-    if (root.isAdvancedPage(page)) root.advancedNavigation = true
   }
 
   // --- inline components ---------------------------------------------------

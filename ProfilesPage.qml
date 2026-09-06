@@ -8,6 +8,7 @@ Item {
   property var svc: null
   property color fg: Color.popups.text
   property string fontFamily: Style.font.family
+  property var openRules: null
 
   function countText(count) {
     if (!root.svc) return String(count)
@@ -74,6 +75,13 @@ Item {
     id: detail
     svc: root.svc
     profileId: ""
+    foreground: root.fg
+    fontFamily: root.fontFamily
+  }
+
+  OverrideEditorDialog {
+    id: overrideDialog
+    svc: root.svc
     foreground: root.fg
     fontFamily: root.fontFamily
   }
@@ -194,13 +202,11 @@ Item {
         visible: root.actionProfile !== null
         enabled: root.svc && root.actionProfile && !root.svc.profileMutating
         onClicked: {
-          detail.profileId = root.actionProfile.id
-          detail.profileName = String(root.actionProfile.name || "")
-          detail.showRuntime = false
-          detail.showOverride = true
-          detail.globalScope = false
+          overrideDialog.profileId = root.actionProfile.id
+          overrideDialog.profileName = String(root.actionProfile.name || "")
+          overrideDialog.globalScope = false
           actionMenu.close()
-          detail.open()
+          overrideDialog.open()
         }
       }
       Button {
@@ -267,7 +273,7 @@ Item {
   }
   ListView {
     id: list
-    anchors.left: parent.left; anchors.right: parent.right; anchors.top: errorText.visible ? errorText.bottom : rule.bottom; anchors.bottom: parent.bottom
+    anchors.left: parent.left; anchors.right: parent.right; anchors.top: errorText.visible ? errorText.bottom : rule.bottom; anchors.bottom: globalConfiguration.top; anchors.bottomMargin: Style.space(12)
     anchors.topMargin: Style.space(14); clip: true; spacing: Style.space(8)
     model: root.svc ? root.svc.profiles : []
     delegate: Rectangle {
@@ -291,5 +297,103 @@ Item {
   }
   Text { anchors.centerIn: list; width: list.width-Style.space(40); visible: list.count === 0; text: root.svc && !root.svc.managerInstalled ? root.setupMissingText : root.svc ? root.svc.t("noProfiles") : ""; color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; renderType: Text.NativeRendering }
   Button { anchors.horizontalCenter: list.horizontalCenter; anchors.top: list.verticalCenter; visible: root.svc && !root.svc.managerInstalled; text: root.svc && root.svc.setupState === "needs-core" ? (root.svc.coreInstalling ? root.svc.t("installing") : root.svc.t("installMihomo")) : root.svc && root.svc.setupLoading ? root.svc.t("settingUp") : root.svc ? root.svc.t("setupMihomo") : "Set up Mihomo"; enabled: root.svc && !root.svc.setupLoading && !root.svc.coreInstalling; onClicked: { if (root.svc.setupState === "needs-core") root.svc.installCore(); else root.svc.setup() } }
+
+  Card {
+    id: globalConfiguration
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    foreground: root.fg
+    visible: root.svc && root.svc.managerInstalled
+    height: visible ? implicitHeight : 0
+
+    PanelSectionHeader {
+      text: root.svc ? root.svc.t("globalConfiguration") : "Global Configuration"
+      foreground: root.fg
+      fontFamily: root.fontFamily
+    }
+
+    Row {
+      width: parent.width
+      spacing: Style.space(8)
+
+      Column {
+        width: parent.width - globalOverrideAction.width - Style.space(8)
+        spacing: Style.space(2)
+        Text {
+          width: parent.width
+          text: root.svc ? root.svc.t("globalOverride") : "Global Override"
+          textFormat: Text.PlainText
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          renderType: Text.NativeRendering
+        }
+        Text {
+          width: parent.width
+          text: root.svc && !root.svc.globalOverrideEmpty
+            ? root.svc.t("customConfiguration")
+            : (root.svc ? root.svc.t("noCustomConfiguration") : "No custom configuration")
+          textFormat: Text.PlainText
+          color: Util.alpha(root.fg, 0.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          renderType: Text.NativeRendering
+        }
+      }
+
+      Button {
+        id: globalOverrideAction
+        text: root.svc ? root.svc.t("edit") : "Edit"
+        enabled: root.svc && !root.svc.globalOverrideLoading && !root.svc.overrideSavePending
+        onClicked: {
+          overrideDialog.globalScope = true
+          overrideDialog.profileId = ""
+          overrideDialog.profileName = ""
+          overrideDialog.open()
+        }
+      }
+    }
+
+    Row {
+      width: parent.width
+      spacing: Style.space(8)
+
+      Column {
+        width: parent.width - customRulesAction.width - Style.space(8)
+        spacing: Style.space(2)
+        Text {
+          width: parent.width
+          text: root.svc ? root.svc.t("customRules") : "Custom Rules"
+          textFormat: Text.PlainText
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          renderType: Text.NativeRendering
+        }
+        Text {
+          width: parent.width
+          text: root.svc
+            ? root.svc.t(root.svc.customRules.length === 1 ? "customRulesCountOne" : "customRulesCountMany", root.svc.customRules.length)
+            : "0 rules"
+          textFormat: Text.PlainText
+          color: Util.alpha(root.fg, 0.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          renderType: Text.NativeRendering
+        }
+      }
+
+      Button {
+        id: customRulesAction
+        text: root.svc ? root.svc.t("manage") : "Manage"
+        enabled: root.svc && !root.svc.customRulesLoading
+        onClicked: if (root.openRules) root.openRules()
+      }
+    }
+  }
 
 }

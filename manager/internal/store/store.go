@@ -48,10 +48,14 @@ func (s *Store) LocksDir() string           { return filepath.Join(s.Home, "lock
 func (s *Store) IndexPath() string          { return filepath.Join(s.ProfilesDir(), "index.json") }
 func (s *Store) SettingsPath() string       { return filepath.Join(s.Home, "settings.json") }
 func (s *Store) GlobalOverridePath() string { return filepath.Join(s.OverridesDir(), "global.yaml") }
-func (s *Store) CurrentPath() string        { return filepath.Join(s.RuntimeDir(), "current.yaml") }
-func (s *Store) PreviousPath() string       { return filepath.Join(s.RuntimeDir(), "previous.yaml") }
-func (s *Store) CandidatePath() string      { return filepath.Join(s.RuntimeDir(), "candidate.yaml") }
-func (s *Store) StatePath() string          { return filepath.Join(s.RuntimeDir(), "state.json") }
+func (s *Store) CustomRulesPath() string    { return filepath.Join(s.Home, "custom-rules.json") }
+func (s *Store) BindingsPath(id string) string {
+	return s.ProfilePath(id, "bindings.json")
+}
+func (s *Store) CurrentPath() string   { return filepath.Join(s.RuntimeDir(), "current.yaml") }
+func (s *Store) PreviousPath() string  { return filepath.Join(s.RuntimeDir(), "previous.yaml") }
+func (s *Store) CandidatePath() string { return filepath.Join(s.RuntimeDir(), "candidate.yaml") }
+func (s *Store) StatePath() string     { return filepath.Join(s.RuntimeDir(), "state.json") }
 
 type RuntimeState struct {
 	ActiveProfile   string `json:"activeProfile,omitempty"`

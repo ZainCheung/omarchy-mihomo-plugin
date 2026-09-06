@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/policy"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/rules"
 )
 
 type Compiler struct {
@@ -12,7 +14,17 @@ type Compiler struct {
 	Protected map[string]any
 }
 
-func (c Compiler) Compile(source, global, override []byte) ([]byte, error) {
+type CompileInput struct {
+	Source          []byte
+	GlobalOverride  []byte
+	ProfileOverride []byte
+	CustomRules     []rules.Rule
+	Bindings        policy.Bindings
+	Settings        profile.Settings
+	Protected       map[string]any
+}
+
+func MergeLayers(source, global, override []byte) (map[string]any, error) {
 	src, e := Parse(source)
 	if e != nil {
 		return nil, fmt.Errorf("parse source: %w", e)
@@ -25,11 +37,32 @@ func (c Compiler) Compile(source, global, override []byte) ([]byte, error) {
 	if e != nil {
 		return nil, fmt.Errorf("parse profile override: %w", e)
 	}
-	out := DeepMerge(src, g)
-	out = DeepMerge(out, p)
-	out = c.managed(out)
-	out = c.protected(out)
-	return Marshal(out)
+	return DeepMerge(DeepMerge(src, g), p), nil
+}
+
+func (c Compiler) Compile(input CompileInput) ([]byte, error) {
+	out, err := MergeLayers(input.Source, input.GlobalOverride, input.ProfileOverride)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := rules.Inject(out, input.CustomRules, input.Bindings)
+	if err != nil {
+		return nil, fmt.Errorf("inject custom rules: %w", err)
+	}
+	settings := input.Settings
+	if settings.DNSManagement == "" && settings.TUNManagement == "" {
+		settings = c.Settings
+	}
+	if settings.DNSManagement == "" && settings.TUNManagement == "" {
+		settings = profile.DefaultSettings()
+	}
+	updated = (Compiler{Settings: settings}).managed(updated)
+	protected := input.Protected
+	if protected == nil && c.Protected != nil {
+		protected = c.Protected
+	}
+	updated = (Compiler{Protected: protected}).protected(updated)
+	return Marshal(updated)
 }
 func (c Compiler) managed(m map[string]any) map[string]any {
 	out := clone(m).(map[string]any)

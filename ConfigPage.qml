@@ -15,14 +15,6 @@ Item {
   property bool showAdvancedNetwork: false
   property bool showCoreOverview: false
 
-  ProfileDetail {
-    id: detail
-    svc: root.svc
-    profileId: ""
-    foreground: root.fg
-    fontFamily: root.fontFamily
-  }
-
   function fmtUpdated(stamp) {
     var text = String(stamp || "")
     if (text === "" || text.indexOf("0001-01-01") === 0)
@@ -87,8 +79,7 @@ Item {
     anchors.right: parent.right
     anchors.top: parent.top
     title: root.svc ? root.svc.t("configTitle") : "Config"
-    subtitle: root.svc && root.svc.configPath !== "" ? root.svc.configPath
-      : (root.svc ? root.svc.t("configNotFound") : "")
+    subtitle: root.svc ? root.svc.t("runningConfiguration") : "Running configuration"
     foreground: root.fg
     fontFamily: root.fontFamily
 
@@ -133,37 +124,7 @@ Item {
         foreground: root.fg
 
         PanelSectionHeader {
-          text: root.svc ? root.svc.t("language") : "Language"
-          foreground: root.fg
-          fontFamily: root.fontFamily
-        }
-
-        LanguageSwitch {
-          svc: root.svc
-          foreground: root.fg
-          fontFamily: root.fontFamily
-        }
-
-        Text {
-          width: parent.width
-          text: root.svc ? root.svc.t("languageHint") : ""
-          textFormat: Text.PlainText
-          color: Util.alpha(root.fg, 0.45)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-          lineHeight: 1.25
-          renderType: Text.NativeRendering
-        }
-
-      }
-
-      Card {
-        width: parent.width
-        foreground: root.fg
-
-        PanelSectionHeader {
-          text: root.svc ? root.svc.t("configFile") : "Config file"
+          text: root.svc ? root.svc.t("runningConfiguration") : "Running configuration"
           foreground: root.fg
           fontFamily: root.fontFamily
         }
@@ -175,23 +136,6 @@ Item {
           foreground: root.fg
           fontFamily: root.fontFamily
           valueBold: true
-        }
-
-        InfoRow {
-          width: parent.width
-          label: root.svc ? root.svc.t("path") : "Path"
-          value: root.svc && root.svc.configPath !== "" ? root.svc.configPath : "--"
-          foreground: root.fg
-          fontFamily: root.fontFamily
-        }
-
-        InfoRow {
-          width: parent.width
-          label: root.svc ? root.svc.t("sizeMtime") : "Size / modified"
-          value: root.fmtSize(root.svc ? root.svc.configSize : 0)
-            + "  ·  " + root.fmtMtime(root.svc ? root.svc.configMtime : 0)
-          foreground: root.fg
-          fontFamily: root.fontFamily
         }
 
         InfoRow {
@@ -258,6 +202,23 @@ Item {
 
         PanelSectionHeader {
           text: root.svc ? root.svc.t("kernelOverview") : "Core overview"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        InfoRow {
+          width: parent.width
+          label: root.svc ? root.svc.t("path") : "Path"
+          value: root.svc && root.svc.configPath !== "" ? root.svc.configPath : "--"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        InfoRow {
+          width: parent.width
+          label: root.svc ? root.svc.t("sizeMtime") : "Size / modified"
+          value: root.fmtSize(root.svc ? root.svc.configSize : 0)
+            + "  ·  " + root.fmtMtime(root.svc ? root.svc.configMtime : 0)
           foreground: root.fg
           fontFamily: root.fontFamily
         }
@@ -333,7 +294,7 @@ Item {
         height: visible ? implicitHeight : 0
 
         PanelSectionHeader {
-          text: root.svc ? root.svc.t("networkManagement") : "Network management"
+          text: root.svc ? root.svc.t("networkSettings") : "Network"
           foreground: root.fg
           fontFamily: root.fontFamily
         }
@@ -341,7 +302,7 @@ Item {
           width: parent.width
           visible: !root.customizeNetwork
           height: visible ? implicitHeight : 0
-          text: root.svc ? root.svc.t("networkAutomaticHint") : "Automatic network settings"
+          text: root.svc ? root.svc.t("networkAutomatic") : "Automatic"
           textFormat: Text.PlainText
           color: Util.alpha(root.fg, 0.6)
           font.family: root.fontFamily
@@ -633,38 +594,9 @@ Item {
           }
         }
 
-        Row {
-          spacing: Style.space(8)
-          Button {
-            text: root.svc ? root.svc.t("recompileReload") : "Recompile & Reload"
-            enabled: root.svc && root.svc.activeProfile !== "" && !root.svc.profileMutating && !root.svc.managerSettingsMutating
-            onClicked: root.svc.recompileActiveProfile()
-          }
-          Button {
-            text: root.svc ? root.svc.t("viewOverride") : "View Override"
-            enabled: root.svc && root.svc.activeProfile !== ""
-            onClicked: {
-              detail.profileId = root.svc.activeProfile
-              detail.globalScope = false
-              detail.showRuntime = false
-              detail.showOverride = true
-              detail.open()
-            }
-          }
-          Button {
-            text: root.svc ? root.svc.t("globalOverride") : "Global Override"
-            enabled: root.svc && root.svc.managerInstalled
-            onClicked: {
-              detail.profileId = ""
-              detail.globalScope = true
-              detail.showRuntime = false
-              detail.showOverride = false
-              detail.open()
-            }
-          }
-        }
-        }
       }
+
+    }
 
       Column {
         id: advancedProviders

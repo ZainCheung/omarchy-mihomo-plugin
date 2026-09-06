@@ -37,6 +37,8 @@ proxy-groups:
   - name: Select
     type: select
     proxies: [DIRECT]
+rules:
+  - MATCH,Select
 YAML
 cat >"$FAKE/http/b.yaml" <<'YAML'
 port: 7890
@@ -46,9 +48,34 @@ proxies:
   - name: DIRECT
     type: direct
 proxy-groups:
-  - name: Select
-    type: select
+  - name: Proxy B
+    type: url-test
     proxies: [DIRECT]
+  - name: Auto B
+    type: fallback
+    proxies: [DIRECT]
+  - name: Streaming B
+    type: load-balance
+    proxies: [DIRECT]
+rules:
+  - MATCH,Proxy B
+YAML
+cat >"$FAKE/http/c.yaml" <<'YAML'
+port: 7890
+mode: rule
+log-level: info
+proxies:
+  - name: DIRECT
+    type: direct
+proxy-groups:
+  - name: Proxy C
+    type: url-test
+    proxies: [DIRECT]
+  - name: Auto C
+    type: fallback
+    proxies: [DIRECT]
+rules:
+  - MATCH,Proxy C
 YAML
 cat >"$FAKE/http/etag.yaml" <<'YAML'
 port: 7890
@@ -61,6 +88,8 @@ proxy-groups:
   - name: Select
     type: select
     proxies: [DIRECT]
+rules:
+  - MATCH,Select
 YAML
 
 cat >"$FAKE/http/server.py" <<'PY'
@@ -77,6 +106,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name, tag = "a.yaml", None
         elif route == "/b":
             name, tag = "b.yaml", None
+        elif route == "/c":
+            name, tag = "c.yaml", None
         elif route == "/etag":
             name, tag = "etag.yaml", "etag-v1"
         elif route == "/bad":
@@ -189,12 +220,14 @@ TUN_PREFLIGHT="$($MANAGER doctor tun --stack gvisor)"
 
 json_value() { python3 -c 'import json,sys; x=json.load(sys.stdin); print(eval(sys.argv[1]))' "$1"; }
 get_id() { json_value 'x["data"]["id"]'; }
+get_rule_id() { json_value 'x["data"]["rule"]["id"]'; }
 fail_cmd() { if "$MANAGER" "$@" >"$TMP/fail.out" 2>"$TMP/fail.err"; then echo "expected failure: $*" >&2; exit 1; fi; }
 assert_eq() { [[ "$1" == "$2" ]] || { echo "assertion failed: '$1' != '$2'" >&2; exit 1; }; }
 assert_file_contains() { grep -Fq "$2" "$1" || { echo "missing '$2' in $1" >&2; exit 1; }; }
 
 A_URL="http://127.0.0.1:$PORT/a"
 B_URL="http://127.0.0.1:$PORT/b"
+C_URL="http://127.0.0.1:$PORT/c"
 ETAG_URL="http://127.0.0.1:$PORT/etag"
 SECRET_URL="http://127.0.0.1:$PORT/a?token=integration-secret"
 
@@ -297,5 +330,105 @@ $MANAGER settings set dns-nameserver '1.1.1.1, 8.8.8.8' >/dev/null
 assert_file_contains "$STORE/settings.json" '8.8.8.8'
 fail_cmd settings set tun-management invalid
 assert_file_contains "$TMP/fail.err" 'managed or inherit'
+
+# Overrides are parsed and applied transactionally. The empty state is exposed
+# as an empty map, not as the implementation detail `{}` in the UI.
+GLOBAL_EMPTY="$($MANAGER override global get)"
+[[ "$GLOBAL_EMPTY" == *'"empty":true'* ]] || { echo 'empty global override was not reported' >&2; exit 1; }
+printf 'log-level: error\n' | $MANAGER override global set --stdin >/dev/null
+assert_file_contains "$STORE/overrides/global.yaml" 'log-level: error'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: error'
+printf '{}\n' | $MANAGER override global set --stdin >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+printf 'allow-lan: true\n' | $MANAGER override profile "$A_ID" set --stdin >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'allow-lan: true'
+printf '{}\n' | $MANAGER override profile "$A_ID" set --stdin >/dev/null
+
+# Custom rules are global, while proxy bindings belong to each profile. Rules
+# are prepended so a user rule still runs before the subscription MATCH rule.
+PROXY_RULE_JSON="$($MANAGER rule add --domain 'https://OPENAI.com/chat' --policy proxy)"
+PROXY_RULE_ID="$(printf '%s' "$PROXY_RULE_JSON" | get_rule_id)"
+DIRECT_RULE_JSON="$($MANAGER rule add --domain '*.github.com.' --policy direct)"
+DIRECT_RULE_ID="$(printf '%s' "$DIRECT_RULE_JSON" | get_rule_id)"
+assert_file_contains "$STORE/custom-rules.json" 'openai.com'
+assert_file_contains "$STORE/custom-rules.json" 'github.com'
+assert_file_contains "$STORE/profiles/$A_ID/bindings.json" 'Select'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Select'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,github.com,DIRECT'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'MATCH,Select'
+OPENAI_LINE="$(grep -nF 'DOMAIN-SUFFIX,openai.com,Select' "$FAKE_LIVE_CONFIG" | head -n1 | cut -d: -f1)"
+MATCH_LINE="$(grep -nF 'MATCH,Select' "$FAKE_LIVE_CONFIG" | head -n1 | cut -d: -f1)"
+[[ "$OPENAI_LINE" -lt "$MATCH_LINE" ]] || { echo 'custom rule was not prepended' >&2; exit 1; }
+
+$MANAGER rule disable "$DIRECT_RULE_ID" >/dev/null
+if grep -Fq 'DOMAIN-SUFFIX,github.com,DIRECT' "$FAKE_LIVE_CONFIG"; then
+  echo 'disabled custom rule remained in runtime' >&2
+  exit 1
+fi
+$MANAGER rule enable "$DIRECT_RULE_ID" >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,github.com,DIRECT'
+
+# B has several non-selector groups, so selecting it with a proxy rule must
+# stop safely and return the candidates instead of guessing.
+fail_cmd profile select "$B_ID"
+assert_file_contains "$TMP/fail.out" '"code":"binding_required"'
+assert_file_contains "$TMP/fail.out" 'Auto B'
+assert_file_contains "$STORE/profiles/index.json" "$A_ID"
+assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+$MANAGER policy binding set "$B_ID" proxy 'Auto B' >/dev/null
+$MANAGER profile select "$B_ID" >/dev/null
+assert_file_contains "$STORE/profiles/$B_ID/bindings.json" 'Auto B'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Auto B'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,github.com,DIRECT'
+$MANAGER profile select "$A_ID" >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Select'
+$MANAGER profile select "$B_ID" >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Auto B'
+
+# Removing the bound group from a subscription makes an active update fail
+# before source/runtime commit. The old source and live config stay intact.
+cp "$STORE/profiles/$B_ID/source.yaml" "$TMP/b-before-stale.yaml"
+cp "$STORE/runtime/current.yaml" "$TMP/current-b-before-stale.yaml"
+cat >"$FAKE/http/b.yaml" <<'YAML'
+port: 7890
+mode: rule
+log-level: newer
+proxies:
+  - name: DIRECT
+    type: direct
+proxy-groups:
+  - name: New B
+    type: url-test
+    proxies: [DIRECT]
+rules:
+  - MATCH,New B
+YAML
+fail_cmd profile update "$B_ID"
+assert_file_contains "$TMP/fail.out" '"code":"binding_required"'
+cmp "$STORE/profiles/$B_ID/source.yaml" "$TMP/b-before-stale.yaml"
+cmp "$STORE/runtime/current.yaml" "$TMP/current-b-before-stale.yaml"
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Auto B'
+
+# A first profile with an ambiguous Proxy policy remains available as an
+# inactive profile. After the user chooses a binding, selection can be retried
+# without fetching the subscription a second time.
+STORE2="$TMP/store-first-profile"
+mkdir -p "$STORE2"
+cp "$STORE/custom-rules.json" "$STORE2/custom-rules.json"
+if OMARCHY_MIHOMO_HOME="$STORE2" "$MANAGER" profile add --url "$C_URL" --name C --activate-if-empty >"$TMP/first-add.out" 2>"$TMP/first-add.err"; then
+  echo 'expected first profile binding choice' >&2
+  exit 1
+fi
+C_ID="$(cat "$TMP/first-add.out" | json_value 'x["profileId"]')"
+[[ -n "$C_ID" ]] || { echo 'first profile error did not include profile id' >&2; exit 1; }
+[[ -d "$STORE2/profiles/$C_ID" ]] || { echo 'ambiguous first profile was discarded' >&2; exit 1; }
+assert_file_contains "$STORE2/profiles/index.json" "$C_ID"
+if grep -Fq '"activeProfile"' "$STORE2/profiles/index.json"; then
+  echo 'ambiguous first profile became active' >&2
+  exit 1
+fi
+OMARCHY_MIHOMO_HOME="$STORE2" "$MANAGER" policy binding set "$C_ID" proxy 'Proxy C' >/dev/null
+OMARCHY_MIHOMO_HOME="$STORE2" "$MANAGER" profile select "$C_ID" >/dev/null
+assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Proxy C'
 
 printf 'manager integration tests: PASS\n'

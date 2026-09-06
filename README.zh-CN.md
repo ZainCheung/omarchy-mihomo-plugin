@@ -3,8 +3,8 @@
 面向 Omarchy 的 Mihomo 客户端，提供状态栏入口和完整控制面板。普通用户只需要粘贴
 订阅、选择节点，然后使用系统代理；需要排查问题时仍可进入高级控制能力。
 
-主要功能包括：远程订阅、本地 YAML 配置档案、档案切换和更新、托管 DNS/TUN、源配置/
-运行时配置/覆盖查看、原子应用与回滚，以及 Mihomo 重启后的当前档案恢复。
+主要功能包括：远程订阅、本地 YAML 配置档案、档案切换和更新、全局自定义规则、托管
+DNS/TUN、源配置/运行时配置/覆盖查看、原子应用与回滚，以及 Mihomo 重启后的当前档案恢复。
 
 托管 TUN 默认使用 `gvisor`，但 **TUN 默认关闭，只有用户主动开启才会接管流量**。仍可选择
 `system`、`gvisor` 或 `mixed`；用户明确选择的 `mixed` 会被保留，方便和本机防火墙行为对比。
@@ -21,10 +21,10 @@
 
 2. 安装并启用插件：
 
-```sh
-omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
-omarchy bar move io.github.ZainCheung.mihomo --section right
-```
+   ```sh
+   omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
+   omarchy bar move io.github.ZainCheung.mihomo --section right
+   ```
 
 3. 打开 Mihomo 小组件。如果看到提示，点击 **设置 Mihomo**。首次设置会优先采用已经能
    连接的 Mihomo；否则创建插件自己的轻量内核和用户服务。
@@ -69,14 +69,25 @@ bin/mihomo-manager profile list
 bin/mihomo-manager profile select <id>
 bin/mihomo-manager profile update <id> --via-proxy
 bin/mihomo-manager settings patch dns-enable true tun-stack gvisor
+bin/mihomo-manager override global get
+bin/mihomo-manager override global set --stdin
+bin/mihomo-manager rule list
+bin/mihomo-manager rule add --domain openai.com --policy proxy
+bin/mihomo-manager policy binding get <profile-id>
+bin/mihomo-manager policy binding set <profile-id> proxy "代理组"
 bin/mihomo-manager reconcile
 bin/mihomo-manager doctor
 bin/mihomo-manager doctor tun --stack gvisor
 ```
 
-远程订阅会先下载、解析、编译并通过 `mihomo -t -f` 校验，成功后才替换源配置。托管
-DNS/TUN 只覆盖管理器明确拥有的字段，订阅中的其他字段会保留；托管配置的运行时文件
-保存在 `~/.config/omarchy-mihomo/runtime/`，包含控制器 Secret 的状态文件权限为 0600。
+远程订阅会先下载、解析、编译并通过 `mihomo -t -f` 校验，成功后才替换源配置。全局
+自定义规则保存在 `~/.config/omarchy-mihomo/custom-rules.json`，会插入订阅规则之前；
+Proxy 规则的代理组选择按配置档案保存在 `profiles/<id>/bindings.json`，Direct/Reject
+分别编译为 `DIRECT`/`REJECT`。订阅更新后若原代理组消失，更新会安全失败并保留旧配置，
+等待用户重新选择代理组。
+
+托管 DNS/TUN 只覆盖管理器明确拥有的字段，订阅中的其他字段会保留；托管配置的运行时
+文件保存在 `~/.config/omarchy-mihomo/runtime/`，包含控制器 Secret 的状态文件权限为 0600。
 
 更完整的实现约束、故障排查和验收用例见
 [`docs/implement.md`](docs/implement.md)。
