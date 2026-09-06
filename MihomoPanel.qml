@@ -68,15 +68,6 @@ Panel {
     when: root.svc !== null && root.svc !== undefined
   }
 
-  // Binding choices can be requested by profile selection as well as by the
-  // Rules page, so keep the dialog outside page-specific content.
-  BindingDialog {
-    id: bindingDialog
-    svc: root.svc
-    foreground: root.fg
-    fontFamily: root.fontFamily
-  }
-
   IpcHandler {
     target: root.ipcTarget
 
@@ -393,6 +384,17 @@ Panel {
           visible: root.page === "rules"
           svc: root.svc
           fg: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        // This popup must live in the KeyboardPanel window. Keeping it on the
+        // bar-widget root makes Qt Quick Controls attach its overlay to the bar
+        // window, so binding_required would update the state without showing the
+        // choice dialog over the open Mihomo panel.
+        BindingDialog {
+          id: bindingDialog
+          svc: root.svc
+          foreground: root.fg
           fontFamily: root.fontFamily
         }
 
