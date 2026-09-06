@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import qs.Ui
 import qs.Commons
 
@@ -39,12 +40,12 @@ Popup {
     domain.selectAll()
   }
 
-  Column {
+  ColumnLayout {
     anchors.fill: parent
     spacing: Style.space(10)
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       text: root.svc ? root.svc.t(root.editing ? "editRule" : "addRule") : (root.editing ? "Edit rule" : "Add rule")
       textFormat: Text.PlainText
       color: root.foreground
@@ -54,67 +55,81 @@ Popup {
       renderType: Text.NativeRendering
     }
 
-    TextField {
-      id: domain
-      width: parent.width
-      placeholderText: root.svc ? root.svc.t("domain") : "Domain"
-      foreground: root.foreground
-      accent: Color.accent
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      selectByMouse: true
-    }
+    ScrollView {
+      id: formScroll
+      Layout.fillWidth: true
+      Layout.fillHeight: true
+      Layout.minimumHeight: 0
+      clip: true
+      ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+      ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
-    PlainTextDropdown {
-      id: policy
-      width: parent.width
-      label: root.svc ? root.svc.t("policy") : "Policy"
-      options: [
-        {label: root.svc ? root.svc.t("policyProxy") : "Proxy", value: "proxy"},
-        {label: root.svc ? root.svc.t("policyDirect") : "Direct", value: "direct"},
-        {label: root.svc ? root.svc.t("policyReject") : "Reject", value: "reject"}
-      ]
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
+      Column {
+        width: formScroll.availableWidth
+        spacing: Style.space(10)
 
-    Button {
-      text: root.svc
-        ? root.svc.t(root.showAdvanced ? "hideAdvancedOptions" : "advancedOptions")
-        : (root.showAdvanced ? "Hide advanced options" : "Advanced")
-      onClicked: root.showAdvanced = !root.showAdvanced
-    }
+        TextField {
+          id: domain
+          width: parent.width
+          placeholderText: root.svc ? root.svc.t("domain") : "Domain"
+          foreground: root.foreground
+          accent: Color.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          selectByMouse: true
+        }
 
-    PlainTextDropdown {
-      id: match
-      width: parent.width
-      visible: root.showAdvanced
-      height: visible ? implicitHeight : 0
-      label: root.svc ? root.svc.t("match") : "Match"
-      options: [
-        {label: root.svc ? root.svc.t("matchDomainSuffix") : "Domain and subdomains", value: "domain-suffix"},
-        {label: root.svc ? root.svc.t("matchDomain") : "Exact domain", value: "domain"}
-      ]
-      value: "domain-suffix"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
+        PlainTextDropdown {
+          id: policy
+          width: parent.width
+          label: root.svc ? root.svc.t("policy") : "Policy"
+          options: [
+            {label: root.svc ? root.svc.t("policyProxy") : "Proxy", value: "proxy"},
+            {label: root.svc ? root.svc.t("policyDirect") : "Direct", value: "direct"},
+            {label: root.svc ? root.svc.t("policyReject") : "Reject", value: "reject"}
+          ]
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
 
-    Text {
-      width: parent.width
-      text: root.svc ? root.svc.t("ruleNormalizationHint") : "URLs and wildcard domains are normalized automatically."
-      textFormat: Text.PlainText
-      color: Util.alpha(root.foreground, 0.5)
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.WordWrap
-      renderType: Text.NativeRendering
-    }
+        Button {
+          text: root.svc
+            ? root.svc.t(root.showAdvanced ? "hideAdvancedOptions" : "advancedOptions")
+            : (root.showAdvanced ? "Hide advanced options" : "Advanced")
+          onClicked: root.showAdvanced = !root.showAdvanced
+        }
 
-    Item { width: 1; height: 1 }
+        PlainTextDropdown {
+          id: match
+          width: parent.width
+          visible: root.showAdvanced
+          height: visible ? implicitHeight : 0
+          label: root.svc ? root.svc.t("match") : "Match"
+          options: [
+            {label: root.svc ? root.svc.t("matchDomainSuffix") : "Domain and subdomains", value: "domain-suffix"},
+            {label: root.svc ? root.svc.t("matchDomain") : "Exact domain", value: "domain"}
+          ]
+          value: "domain-suffix"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Text {
+          width: parent.width
+          text: root.svc ? root.svc.t("ruleNormalizationHint") : "URLs and wildcard domains are normalized automatically."
+          textFormat: Text.PlainText
+          color: Util.alpha(root.foreground, 0.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          renderType: Text.NativeRendering
+        }
+      }
+    }
 
     Row {
-      width: parent.width
+      Layout.fillWidth: true
+      Layout.preferredHeight: implicitHeight
       spacing: Style.space(8)
       layoutDirection: Qt.RightToLeft
 

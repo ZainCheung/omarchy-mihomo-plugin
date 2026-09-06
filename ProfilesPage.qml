@@ -109,6 +109,8 @@ Item {
     focus: true
     padding: Style.space(10)
     width: Style.space(230)
+    height: Math.min(actionColumn.implicitHeight + Style.space(20),
+                     Math.max(Style.space(220), Overlay.overlay ? Overlay.overlay.height - Style.space(32) : Style.space(420)))
     anchors.centerIn: Overlay.overlay
     background: Rectangle {
       color: Color.popups.background
@@ -116,108 +118,118 @@ Item {
       border.width: 1
       border.color: Util.alpha(root.fg, 0.2)
     }
-    Column {
-      width: parent.width
-      spacing: Style.space(4)
-      Text {
-        width: parent.width
-        text: root.actionProfile ? String(root.actionProfile.name || "") : ""
-        textFormat: Text.PlainText
-        color: root.fg
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        font.bold: true
-        elide: Text.ElideRight
-        renderType: Text.NativeRendering
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("updateProfile") : "Update"
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: { root.svc.updateProfile(root.actionProfile.id, false); actionMenu.close() }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("updateViaProxy") : "Update via proxy"
-        visible: root.actionProfile && root.actionProfile.type === "remote"
-        enabled: root.svc && root.actionProfile && root.svc.connected && !root.svc.profileMutating
-        onClicked: { root.svc.updateProfileViaProxy(root.actionProfile.id); actionMenu.close() }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("renameProfile") : "Rename"
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          renameDialog.profileId = root.actionProfile.id
-          renameDialog.profileName = String(root.actionProfile.name || "")
-          actionMenu.close()
-          renameDialog.open()
+    ScrollView {
+      id: actionScroll
+      anchors.fill: parent
+      clip: true
+      ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+      ScrollBar.vertical.policy: actionColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+
+      Column {
+        id: actionColumn
+        width: actionScroll.availableWidth
+        spacing: Style.space(4)
+
+        Text {
+          width: parent.width
+          text: root.actionProfile ? String(root.actionProfile.name || "") : ""
+          textFormat: Text.PlainText
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          elide: Text.ElideRight
+          renderType: Text.NativeRendering
         }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("editProfileUrl") : "Edit URL"
-        visible: root.actionProfile && root.actionProfile.type === "remote"
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          var id = root.actionProfile.id
-          actionMenu.close()
-          urlDialog.profileId = id
-          urlDialog.profileUrl = ""
-          root.svc.readProfileURL(id, function(value) { urlDialog.profileUrl = value; urlDialog.open() })
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("updateProfile") : "Update"
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: { root.svc.updateProfile(root.actionProfile.id, false); actionMenu.close() }
         }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("viewSource") : "View source"
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          detail.profileId = root.actionProfile.id
-          detail.profileName = String(root.actionProfile.name || "")
-          detail.showRuntime = false
-          detail.showOverride = false
-          detail.globalScope = false
-          actionMenu.close()
-          detail.open()
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("updateViaProxy") : "Update via proxy"
+          visible: root.actionProfile && root.actionProfile.type === "remote"
+          enabled: root.svc && root.actionProfile && root.svc.connected && !root.svc.profileMutating
+          onClicked: { root.svc.updateProfileViaProxy(root.actionProfile.id); actionMenu.close() }
         }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("viewRuntime") : "View runtime"
-        visible: root.actionProfile && root.svc && root.svc.activeProfile === root.actionProfile.id
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          detail.profileId = root.actionProfile.id
-          detail.profileName = String(root.actionProfile.name || "")
-          detail.showRuntime = true
-          detail.showOverride = false
-          detail.globalScope = false
-          actionMenu.close()
-          detail.open()
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("renameProfile") : "Rename"
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            renameDialog.profileId = root.actionProfile.id
+            renameDialog.profileName = String(root.actionProfile.name || "")
+            actionMenu.close()
+            renameDialog.open()
+          }
         }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("viewOverride") : "View override"
-        visible: root.actionProfile !== null
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          overrideDialog.profileId = root.actionProfile.id
-          overrideDialog.profileName = String(root.actionProfile.name || "")
-          overrideDialog.globalScope = false
-          actionMenu.close()
-          overrideDialog.open()
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("editProfileUrl") : "Edit URL"
+          visible: root.actionProfile && root.actionProfile.type === "remote"
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            var id = root.actionProfile.id
+            actionMenu.close()
+            urlDialog.profileId = id
+            urlDialog.profileUrl = ""
+            root.svc.readProfileURL(id, function(value) { urlDialog.profileUrl = value; urlDialog.open() })
+          }
         }
-      }
-      Button {
-        width: parent.width
-        text: root.svc ? root.svc.t("deleteProfile") : "Delete"
-        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
-        onClicked: {
-          root.profileRemoveId = root.actionProfile.id
-          root.profileRemoveName = String(root.actionProfile.name || "")
-          actionMenu.close()
-          root.profileRemoving = true
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("viewSource") : "View source"
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            detail.profileId = root.actionProfile.id
+            detail.profileName = String(root.actionProfile.name || "")
+            detail.showRuntime = false
+            detail.showOverride = false
+            detail.globalScope = false
+            actionMenu.close()
+            detail.open()
+          }
+        }
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("viewRuntime") : "View runtime"
+          visible: root.actionProfile && root.svc && root.svc.activeProfile === root.actionProfile.id
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            detail.profileId = root.actionProfile.id
+            detail.profileName = String(root.actionProfile.name || "")
+            detail.showRuntime = true
+            detail.showOverride = false
+            detail.globalScope = false
+            actionMenu.close()
+            detail.open()
+          }
+        }
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("viewOverride") : "View override"
+          visible: root.actionProfile !== null
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            overrideDialog.profileId = root.actionProfile.id
+            overrideDialog.profileName = String(root.actionProfile.name || "")
+            overrideDialog.globalScope = false
+            actionMenu.close()
+            overrideDialog.open()
+          }
+        }
+        Button {
+          width: parent.width
+          text: root.svc ? root.svc.t("deleteProfile") : "Delete"
+          enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+          onClicked: {
+            root.profileRemoveId = root.actionProfile.id
+            root.profileRemoveName = String(root.actionProfile.name || "")
+            actionMenu.close()
+            root.profileRemoving = true
+          }
         }
       }
     }

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import qs.Ui
 import qs.Commons
 
@@ -61,12 +62,12 @@ Popup {
       })
   }
 
-  Column {
+  ColumnLayout {
     anchors.fill: parent
     spacing: Style.space(10)
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       text: root.globalScope
         ? (root.svc ? root.svc.t("globalOverride") : "Global Override")
         : (root.svc ? root.svc.t("profileOverride") : "Profile Override")
@@ -79,7 +80,7 @@ Popup {
     }
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       visible: !root.globalScope && root.profileName !== ""
       text: root.profileName
       textFormat: Text.PlainText
@@ -90,22 +91,33 @@ Popup {
       renderType: Text.NativeRendering
     }
 
-    TextArea {
-      id: editor
-      width: parent.width
-      height: parent.height - Style.space(122)
-      color: root.foreground
-      selectionColor: Util.alpha(Color.accent, 0.35)
-      selectedTextColor: root.foreground
-      font.family: "monospace"
-      font.pixelSize: Style.font.caption
-      wrapMode: TextArea.NoWrap
-      selectByMouse: true
-      placeholderText: "# YAML override"
-      enabled: !root.loading && !root.saving
+    ScrollView {
+      id: editorScroll
+      Layout.fillWidth: true
+      Layout.fillHeight: true
+      Layout.minimumHeight: 0
+      clip: true
+      ScrollBar.vertical.policy: ScrollBar.AsNeeded
+      ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+
+      TextArea {
+        id: editor
+        width: Math.max(editorScroll.availableWidth, contentWidth)
+        height: Math.max(editorScroll.availableHeight, contentHeight)
+        color: root.foreground
+        selectionColor: Util.alpha(Color.accent, 0.35)
+        selectedTextColor: root.foreground
+        font.family: "monospace"
+        font.pixelSize: Style.font.caption
+        wrapMode: TextArea.NoWrap
+        selectByMouse: true
+        placeholderText: "# YAML override"
+        enabled: !root.loading && !root.saving
+      }
     }
 
     Button {
+      Layout.alignment: Qt.AlignLeft
       text: root.svc ? root.svc.t("openEditor") : "Open in editor"
       enabled: root.svc && !root.loading && !root.saving
       onClicked: {
@@ -115,7 +127,7 @@ Popup {
     }
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       visible: root.errorText !== ""
       text: root.errorText
       textFormat: Text.PlainText
@@ -127,7 +139,8 @@ Popup {
     }
 
     Row {
-      width: parent.width
+      Layout.fillWidth: true
+      Layout.preferredHeight: implicitHeight
       spacing: Style.space(8)
       layoutDirection: Qt.RightToLeft
 
