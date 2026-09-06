@@ -362,7 +362,7 @@ Item {
       spacing: Style.space(8)
 
       Column {
-        width: parent.width - customRulesAction.width - Style.space(8)
+        width: parent.width - proxyBindingAction.width - customRulesAction.width - Style.space(16)
         spacing: Style.space(2)
         Text {
           width: parent.width
@@ -388,9 +388,17 @@ Item {
       }
 
       Button {
+        id: proxyBindingAction
+        text: root.svc ? root.svc.t("editProxyBinding") : "Edit proxy group"
+        enabled: root.svc && root.svc.managerInstalled && root.svc.activeProfile !== ""
+          && !root.svc.bindingCandidatesLoading && !root.svc.profileMutating
+        onClicked: root.svc.openProxyBindingEditor()
+      }
+
+      Button {
         id: customRulesAction
-        text: root.svc ? root.svc.t("manage") : "Manage"
-        enabled: root.svc && !root.svc.customRulesLoading
+        text: root.svc ? root.svc.t("viewAllRules") : "View all"
+        enabled: root.svc && !root.svc.customRulesLoading && !root.svc.profileMutating
         onClicked: if (root.openRules) root.openRules()
       }
     }

@@ -92,6 +92,7 @@ Item {
   property var bindingRequiredCandidates: []
   property string bindingRequiredProfileId: ""
   property string bindingRequiredPolicy: ""
+  property bool bindingCandidatesLoading: false
   property var pendingManagerActionAfterBinding: null
 
   // Set by the panel. Drives poll cadence and the streaming subscriptions.
@@ -672,6 +673,14 @@ Item {
   function setPolicyBinding(profileId, policyName, target) {
     if (!profileId || !policyName || !target) return
     enqueueManager(["policy", "binding", "set", profileId, policyName, target])
+  }
+
+  function openProxyBindingEditor() {
+    if (!ready || !managerInstalled || activeProfile === "" || bindingCandidatesProc.running) return
+    bindingCandidatesLoading = true
+    bindingCandidatesProc.command = ["/usr/bin/bash", managerRunner,
+                                     "policy", "binding", "candidates", activeProfile]
+    bindingCandidatesProc.running = true
   }
 
   function clearBindingRequired() {
@@ -1703,6 +1712,46 @@ Item {
       onStreamFinished: root.applyCustomRules(text)
     }
     onExited: root.customRulesLoading = false
+  }
+
+  Process {
+    id: bindingCandidatesProc
+    command: ["/usr/bin/bash", root.managerRunner,
+              "policy", "binding", "candidates", ""]
+    stdout: StdioCollector {
+      id: bindingCandidatesOut
+      waitForEnd: true
+      onStreamFinished: {
+        root.bindingCandidatesLoading = false
+        try {
+          var data = JSON.parse(String(text || ""))
+          if (!data.ok) {
+            root.bindingRequired = false
+            root.notice = root.actionErrorMessage(text)
+            if (root.notice === "") root.notice = root.t("actionFailed")
+            return
+          }
+          var payload = data.data || {}
+          var candidates = payload.candidates || data.candidates || []
+          if (!Array.isArray(candidates)) candidates = []
+          root.bindingRequiredCandidates = candidates
+          root.bindingRequiredProfileId = String(payload.profileId || data.profileId || root.activeProfile)
+          root.bindingRequiredPolicy = "proxy"
+          root.pendingManagerActionAfterBinding = null
+          root.bindingRequired = true
+        } catch (e) {
+          root.bindingRequired = false
+          root.notice = root.t("parseError")
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.bindingCandidatesLoading) {
+        root.bindingCandidatesLoading = false
+        root.bindingRequired = false
+        root.notice = root.t("actionFailed")
+      }
+    }
   }
 
   Process {

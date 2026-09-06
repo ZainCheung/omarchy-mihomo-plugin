@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import qs.Ui
 import qs.Commons
 
@@ -15,7 +16,7 @@ Item {
   property bool removingRule: false
 
   readonly property var effectiveRows: {
-    if (!root.svc || root.filter.trim() === "") return []
+    if (!root.svc) return []
     var needle = root.filter.trim().toLowerCase()
     var all = root.svc.rules || []
     var out = []
@@ -24,12 +25,30 @@ Item {
       var payload = String(rule.payload || rule.rulePayload || "")
       var type = String(rule.type || "")
       var target = String(rule.proxy || rule.policy || "")
-      if (payload.toLowerCase().indexOf(needle) >= 0
+      if (needle === ""
+          || payload.toLowerCase().indexOf(needle) >= 0
           || type.toLowerCase().indexOf(needle) >= 0
           || target.toLowerCase().indexOf(needle) >= 0) {
         out.push({index: i, payload: payload, type: type, target: target})
       }
     }
+    return out
+  }
+
+  readonly property var allCustomRuleRows: {
+    if (!root.svc) return []
+    var all = root.svc.customRules || []
+    var out = []
+    for (var i = all.length - 1; i >= 0; i--) out.push(all[i])
+    return out
+  }
+
+  readonly property var customRulePreviewRows: {
+    var all = root.allCustomRuleRows
+    if (all.length === 0) return []
+    var out = [all[0]]
+    if (all.length === 2) out.push(all[1])
+    else if (all.length > 2) out.push({summary: true, remaining: all.length - 1})
     return out
   }
 
@@ -105,6 +124,10 @@ Item {
     filterField.selectAll()
   }
 
+  function openAllRules() {
+    allRulesPopup.open()
+  }
+
   AddRuleDialog {
     id: addRuleDialog
     svc: root.svc
@@ -122,7 +145,7 @@ Item {
   ConfirmDialog {
     id: removeConfirm
     anchors.fill: parent
-    z: 100
+    z: 300
     opened: root.removingRule
     cancelText: root.svc ? root.svc.t("cancel") : "Cancel"
     confirmText: root.svc ? root.svc.t("deleteRule") : "Delete rule"
@@ -135,6 +158,170 @@ Item {
       if (root.svc && root.removingRuleId !== "") root.svc.deleteCustomRule(root.removingRuleId)
       root.removingRule = false
       root.removingRuleId = ""
+    }
+  }
+
+  Popup {
+    id: allRulesPopup
+    modal: true
+    focus: true
+    z: 200
+    padding: Style.space(18)
+    width: Math.min(Style.space(560), Math.max(Style.space(320), root.width - Style.space(24)))
+    height: Math.min(Style.space(560), Math.max(Style.space(260), root.height - Style.space(24)))
+    anchors.centerIn: Overlay.overlay
+    background: Rectangle {
+      color: Color.popups.background
+      radius: Style.cornerRadius
+      border.width: 1
+      border.color: Util.alpha(root.fg, 0.2)
+    }
+
+    ColumnLayout {
+      anchors.fill: parent
+      spacing: Style.space(10)
+
+      RowLayout {
+        Layout.fillWidth: true
+        Layout.preferredHeight: titleText.implicitHeight
+
+        Text {
+          id: titleText
+          Layout.fillWidth: true
+          text: root.svc ? root.svc.t("allCustomRules") : "All custom rules"
+          textFormat: Text.PlainText
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+          renderType: Text.NativeRendering
+        }
+
+        Button {
+          text: root.svc ? root.svc.t("close") : "Close"
+          onClicked: allRulesPopup.close()
+        }
+      }
+
+      Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        color: Util.alpha(root.fg, 0.12)
+      }
+
+      ListView {
+        id: allRulesList
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        Layout.minimumHeight: 0
+        clip: true
+        spacing: Style.space(6)
+        model: root.allCustomRuleRows
+
+        delegate: Rectangle {
+          required property var modelData
+          width: allRulesList.width
+          height: Style.space(56)
+          radius: Style.cornerRadius
+          color: allRuleMouse.containsMouse ? Util.alpha(root.fg, 0.07) : Util.alpha(root.fg, 0.03)
+
+          MouseArea {
+            id: allRuleMouse
+            anchors.fill: parent
+            hoverEnabled: true
+          }
+
+          Column {
+            anchors.left: parent.left
+            anchors.right: allRuleActions.left
+            anchors.leftMargin: Style.space(10)
+            anchors.rightMargin: Style.space(8)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            Text {
+              width: parent.width
+              text: root.ruleDomain(modelData)
+              textFormat: Text.PlainText
+              color: modelData.enabled === false ? Util.alpha(root.fg, 0.45) : root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+              elide: Text.ElideRight
+              renderType: Text.NativeRendering
+            }
+
+            Text {
+              width: parent.width
+              text: root.policyLabel(String(modelData.policy || "proxy"))
+                + " · " + root.matchLabel(modelData)
+              textFormat: Text.PlainText
+              color: modelData.enabled === false ? Util.alpha(root.fg, 0.35) : Util.alpha(root.fg, 0.55)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              renderType: Text.NativeRendering
+            }
+          }
+
+          Row {
+            id: allRuleActions
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(8)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            PanelActionButton {
+              iconText: "󰏫"
+              tooltipText: root.svc ? root.svc.t("editRule") : "Edit rule"
+              foreground: root.fg
+              hoverColor: Color.accent
+              fontFamily: root.fontFamily
+              enabled: root.svc && !root.svc.profileMutating
+              onClicked: root.openEdit(modelData)
+            }
+
+            PanelActionButton {
+              iconText: modelData.enabled === false ? "󰐊" : "󰏤"
+              tooltipText: root.svc
+                ? root.svc.t(modelData.enabled === false ? "enableRule" : "disableRule")
+                : (modelData.enabled === false ? "Enable" : "Disable")
+              foreground: root.fg
+              hoverColor: Color.accent
+              fontFamily: root.fontFamily
+              enabled: root.svc && !root.svc.profileMutating
+              onClicked: modelData.enabled === false
+                ? root.svc.enableCustomRule(String(modelData.id))
+                : root.svc.disableCustomRule(String(modelData.id))
+            }
+
+            PanelActionButton {
+              iconText: "󰆴"
+              tooltipText: root.svc ? root.svc.t("deleteRule") : "Delete rule"
+              foreground: root.fg
+              hoverColor: Color.urgent
+              fontFamily: root.fontFamily
+              enabled: root.svc && !root.svc.profileMutating
+              onClicked: root.removeRule(modelData)
+            }
+          }
+        }
+
+        ScrollBar.vertical: ScrollBar {
+          policy: ScrollBar.AsNeeded
+        }
+      }
+
+      Text {
+        Layout.fillWidth: true
+        visible: root.allCustomRuleRows.length === 0
+        text: root.svc ? root.svc.t("noCustomRules") : "No custom rules yet."
+        textFormat: Text.PlainText
+        color: Util.alpha(root.fg, 0.5)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        renderType: Text.NativeRendering
+      }
     }
   }
 
@@ -203,39 +390,53 @@ Item {
 
         Row {
           width: parent.width
-          height: Math.max(myRulesHeader.implicitHeight, addButton.implicitHeight)
+          height: Math.max(myRulesHeader.implicitHeight,
+                           Math.max(proxyBindingButton.implicitHeight, viewAllButton.implicitHeight))
 
           PanelSectionHeader {
             id: myRulesHeader
-            width: parent.width - addButton.width - Style.space(10)
+            width: parent.width - proxyBindingButton.width - viewAllButton.width - Style.space(20)
             text: root.svc ? root.svc.t("myRules") : "My Rules"
             foreground: root.fg
             fontFamily: root.fontFamily
           }
 
           Button {
-            id: addButton
+            id: proxyBindingButton
             anchors.verticalCenter: parent.verticalCenter
-            text: root.svc ? root.svc.t("addRule") : "Add rule"
-            enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating
-            onClicked: root.openAdd()
+            text: root.svc ? root.svc.t("editProxyBinding") : "Edit proxy group"
+            enabled: root.svc && root.svc.managerInstalled && root.svc.activeProfile !== ""
+              && !root.svc.bindingCandidatesLoading && !root.svc.profileMutating
+            onClicked: root.svc.openProxyBindingEditor()
+          }
+
+          Button {
+            id: viewAllButton
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.svc ? root.svc.t("viewAllRules") : "View all"
+            enabled: root.allCustomRuleRows.length > 0
+            onClicked: root.openAllRules()
           }
         }
 
         Repeater {
-          model: root.svc ? root.svc.customRules : []
+          model: root.customRulePreviewRows
 
           delegate: Rectangle {
             required property var modelData
             width: myRulesCard.width - myRulesCard.pad * 2
-            height: Style.space(54)
+            property bool summaryRow: modelData && modelData.summary === true
+            height: summaryRow ? Style.space(36) : Style.space(54)
             radius: Style.cornerRadius
-            color: ruleMouse.containsMouse ? Util.alpha(root.fg, 0.07) : Util.alpha(root.fg, 0.03)
+            color: summaryRow
+              ? Util.alpha(root.fg, 0.02)
+              : (ruleMouse.containsMouse ? Util.alpha(root.fg, 0.07) : Util.alpha(root.fg, 0.03))
 
             MouseArea {
               id: ruleMouse
               anchors.fill: parent
               hoverEnabled: true
+              visible: !summaryRow
             }
 
             Column {
@@ -245,6 +446,7 @@ Item {
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(2)
+              visible: !summaryRow
 
               Text {
                 width: parent.width
@@ -271,12 +473,26 @@ Item {
               }
             }
 
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: summaryRow
+              text: root.svc ? root.svc.t("remainingRules", modelData.remaining) : (modelData.remaining + " more rules")
+              textFormat: Text.PlainText
+              color: Util.alpha(root.fg, 0.55)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              renderType: Text.NativeRendering
+            }
+
             Row {
               id: ruleActions
               anchors.right: parent.right
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(2)
+              visible: !summaryRow
 
               PanelActionButton {
                 iconText: "󰏫"
@@ -354,18 +570,6 @@ Item {
           }
         }
 
-        Text {
-          width: parent.width
-          visible: root.filter.trim() === ""
-          text: root.svc ? root.svc.t("searchEffectiveRules") : "Search to inspect effective rules."
-          textFormat: Text.PlainText
-          color: Util.alpha(root.fg, 0.5)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-          renderType: Text.NativeRendering
-        }
-
         Repeater {
           model: root.effectiveRows
 
@@ -412,8 +616,10 @@ Item {
 
         Text {
           width: parent.width
-          visible: root.filter.trim() !== "" && root.effectiveRows.length === 0
-          text: root.svc ? root.svc.t("noMatchRules") : "No rules match."
+          visible: root.effectiveRows.length === 0
+          text: root.svc
+            ? root.svc.t(root.filter.trim() === "" ? "noRules" : "noMatchRules")
+            : (root.filter.trim() === "" ? "This config has no rules." : "No rules match.")
           textFormat: Text.PlainText
           color: Util.alpha(root.fg, 0.5)
           font.family: root.fontFamily

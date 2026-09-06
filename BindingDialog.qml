@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import qs.Ui
 import qs.Commons
 
@@ -32,12 +33,12 @@ Popup {
     }
   }
 
-  Column {
+  ColumnLayout {
     anchors.fill: parent
     spacing: Style.space(10)
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       text: root.svc ? root.svc.t("bindingRequired") : "Choose a proxy group"
       textFormat: Text.PlainText
       color: root.foreground
@@ -48,7 +49,7 @@ Popup {
     }
 
     Text {
-      width: parent.width
+      Layout.fillWidth: true
       text: root.svc && root.svc.bindingRequiredCandidates.length > 0
         ? (root.svc.t("chooseProxyGroup") + ":")
         : (root.svc ? root.svc.t("bindingUnavailable") : "No usable proxy group is available for Proxy")
@@ -60,26 +61,35 @@ Popup {
       renderType: Text.NativeRendering
     }
 
-    Column {
-      width: parent.width
+    ListView {
+      id: candidateList
+      Layout.fillWidth: true
+      Layout.fillHeight: true
+      Layout.minimumHeight: 0
+      clip: true
       spacing: Style.space(5)
-      Repeater {
-        model: root.svc ? root.svc.bindingRequiredCandidates : []
-        Button {
-          required property string modelData
-          width: parent.width
-          text: modelData
-          onClicked: {
-            root.svc.setPolicyBinding(root.svc.bindingRequiredProfileId,
-                                      root.svc.bindingRequiredPolicy || "proxy", modelData)
-            root.close()
-          }
+      model: root.svc ? root.svc.bindingRequiredCandidates : []
+
+      delegate: Button {
+        required property string modelData
+        width: candidateList.width
+        height: Style.space(34)
+        text: modelData
+        onClicked: {
+          root.svc.setPolicyBinding(root.svc.bindingRequiredProfileId,
+                                    root.svc.bindingRequiredPolicy || "proxy", modelData)
+          root.close()
         }
+      }
+
+      ScrollBar.vertical: ScrollBar {
+        policy: ScrollBar.AsNeeded
       }
     }
 
     Row {
-      width: parent.width
+      Layout.fillWidth: true
+      Layout.preferredHeight: implicitHeight
       layoutDirection: Qt.RightToLeft
       Button {
         text: root.svc ? root.svc.t("cancel") : "Cancel"
