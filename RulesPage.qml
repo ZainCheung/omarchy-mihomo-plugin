@@ -88,11 +88,38 @@ Item {
   }
 
   function openAdd() {
+    root.openAddForDomain("", "domain-suffix")
+  }
+
+  function openAddForDomain(domain, matchType) {
     addRuleDialog.ruleId = ""
-    addRuleDialog.initialDomain = ""
-    addRuleDialog.initialMatch = "domain-suffix"
+    addRuleDialog.initialDomain = String(domain || "")
+    addRuleDialog.initialMatch = String(matchType || "domain-suffix")
     addRuleDialog.initialPolicy = "proxy"
     addRuleDialog.open()
+  }
+
+  function effectiveRuleDomain(rule) {
+    var type = String(rule && rule.type || "").toUpperCase()
+    if (type !== "DOMAIN" && type !== "DOMAIN-SUFFIX") return ""
+    return String(rule && rule.payload || "").trim()
+  }
+
+  function effectiveRuleMatch(rule) {
+    return String(rule && rule.type || "").toUpperCase() === "DOMAIN"
+      ? "domain" : "domain-suffix"
+  }
+
+  function openEffectiveRuleMenu(rule, area, mouse) {
+    var domain = root.effectiveRuleDomain(rule)
+    var point = area.mapToItem(Overlay.overlay, mouse.x, mouse.y)
+    effectiveRuleContextMenu.title = String(rule && rule.payload || "")
+      + " · " + String(rule && rule.type || "")
+    effectiveRuleContextMenu.domain = domain
+    effectiveRuleContextMenu.actionEnabled = root.svc && root.svc.managerInstalled
+      && !root.svc.profileMutating
+    effectiveRuleContextMenu.matchType = root.effectiveRuleMatch(rule)
+    effectiveRuleContextMenu.openAt(point.x, point.y)
   }
 
   function openEdit(rule) {
@@ -132,6 +159,19 @@ Item {
     svc: root.svc
     foreground: root.fg
     fontFamily: root.fontFamily
+  }
+
+  RuleContextMenu {
+    id: effectiveRuleContextMenu
+    property string matchType: "domain-suffix"
+    svc: root.svc
+    foreground: root.fg
+    fontFamily: root.fontFamily
+    onAddToRulesRequested: {
+      if (effectiveRuleContextMenu.domain !== "")
+        root.openAddForDomain(effectiveRuleContextMenu.domain,
+                              effectiveRuleContextMenu.matchType)
+    }
   }
 
   AddRuleDialog {
@@ -593,6 +633,18 @@ Item {
             height: Style.space(38)
             radius: Style.cornerRadius
             color: Util.alpha(root.fg, 0.03)
+
+            MouseArea {
+              id: effectiveRuleMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              acceptedButtons: Qt.LeftButton | Qt.RightButton
+              onPressed: function(mouse) {
+                if (mouse.button !== Qt.RightButton) return
+                root.openEffectiveRuleMenu(modelData, effectiveRuleMouse, mouse)
+                mouse.accepted = true
+              }
+            }
 
             Text {
               anchors.left: parent.left

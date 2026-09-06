@@ -365,6 +365,10 @@ Panel {
           anchors.fill: parent
           visible: root.page === "connections"
           svc: root.svc
+          addRuleForDomain: function(domain) {
+            root.goto("rules")
+            rulesPage.openAddForDomain(domain, "domain-suffix")
+          }
           fg: root.fg
           fontFamily: root.fontFamily
         }

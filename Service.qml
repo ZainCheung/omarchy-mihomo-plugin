@@ -951,18 +951,20 @@ Item {
         var meta = c.metadata || {}
         var chains = c.chains || []
         var id = String(c.id || "")
-        var host = String(meta.host || meta.destinationIP || "") + ":" + String(meta.destinationPort || "")
+        var domain = String(meta.host || meta.destinationIP || "")
+        var host = domain + ":" + String(meta.destinationPort || "")
         var process = String(meta.process || "")
         var chain = chains.slice().reverse().join(" / ")
         var rule = String(c.rule || "") + (c.rulePayload ? "(" + c.rulePayload + ")" : "")
         var upload = Number(c.upload || 0)
         var download = Number(c.download || 0)
         bytes[id] = { upload: upload, download: download }
-        idents.push(id + "\x1f" + host + "\x1f" + process + "\x1f" + chain + "\x1f" + rule)
+        idents.push(id + "\x1f" + domain + "\x1f" + host + "\x1f" + process + "\x1f" + chain + "\x1f" + rule)
         byteParts.push(id + "=" + upload + "," + download)
         rows.push({
           id: id,
           host: host,
+          domain: domain,
           process: process,
           network: String(meta.network || "").toUpperCase(),
           type: String(meta.type || ""),
