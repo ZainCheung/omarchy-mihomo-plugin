@@ -16,7 +16,7 @@ Item {
   property bool removingRule: false
 
   readonly property var effectiveRows: {
-    if (!root.svc) return []
+    if (!root.svc || root.filter.trim() === "") return []
     var needle = root.filter.trim().toLowerCase()
     var all = root.svc.rules || []
     var out = []
@@ -25,8 +25,7 @@ Item {
       var payload = String(rule.payload || rule.rulePayload || "")
       var type = String(rule.type || "")
       var target = String(rule.proxy || rule.policy || "")
-      if (needle === ""
-          || payload.toLowerCase().indexOf(needle) >= 0
+      if (payload.toLowerCase().indexOf(needle) >= 0
           || type.toLowerCase().indexOf(needle) >= 0
           || target.toLowerCase().indexOf(needle) >= 0) {
         out.push({index: i, payload: payload, type: type, target: target})
@@ -419,6 +418,21 @@ Item {
           }
         }
 
+        Text {
+          width: parent.width
+          visible: root.filter.trim() === ""
+          text: {
+            if (!root.svc) return "0 rules"
+            var count = (root.svc.rules || []).length
+            return root.svc.t(count === 1 ? "rulesCountOne" : "rulesCountMany", count)
+          }
+          textFormat: Text.PlainText
+          color: Util.alpha(root.fg, 0.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          renderType: Text.NativeRendering
+        }
+
         Repeater {
           model: root.customRulePreviewRows
 
@@ -616,7 +630,7 @@ Item {
 
         Text {
           width: parent.width
-          visible: root.effectiveRows.length === 0
+          visible: root.filter.trim() !== "" && root.effectiveRows.length === 0
           text: root.svc
             ? root.svc.t(root.filter.trim() === "" ? "noRules" : "noMatchRules")
             : (root.filter.trim() === "" ? "This config has no rules." : "No rules match.")
