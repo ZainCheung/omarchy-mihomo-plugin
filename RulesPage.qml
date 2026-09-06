@@ -203,7 +203,7 @@ Item {
 
         Row {
           width: parent.width
-          implicitHeight: Math.max(myRulesHeader.implicitHeight, addButton.implicitHeight)
+          height: Math.max(myRulesHeader.implicitHeight, addButton.implicitHeight)
 
           PanelSectionHeader {
             id: myRulesHeader
