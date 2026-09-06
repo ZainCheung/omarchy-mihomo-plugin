@@ -5,7 +5,7 @@
   "version": "0.4.0",
   "author": "ZainCheung",
   "license": "MIT",
-  "description": "Control panel for the mihomo core: Home, Profiles, Proxies, Config, Connections, Rules and Diagnostics. Talks to the external controller directly; no GUI client required.",
+  "description": "Omarchy Mihomo client: first-time setup, subscriptions, nodes, system proxy, TUN and diagnostics, with advanced core controls.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Mihomo",
-    "description": "mihomo core panel: profiles, nodes, DNS/TUN, connections, rules and diagnostics",
+    "description": "Mihomo client: subscriptions, nodes, proxy capture, TUN and diagnostics",
     "category": "Network",
     "defaultSection": "right",
     "allowMultiple": false

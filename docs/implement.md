@@ -97,23 +97,23 @@ traffic/config/proxy operations
                 MihomoPanel.qml
                        │
                  Service.qml
-                /           \
-               /             \
-      mihomo-ctl         mihomo-manager
-          │                    │
-          │                    ├── Profile Manager
-          │                    ├── Subscription Fetcher
-          │                    ├── Config Compiler
-          │                    ├── Validator
-          │                    ├── Runtime Manager
-          │                    ├── Rollback Manager
-          │                    └── Doctor
-          │
-          ▼
-    Mihomo REST API
-          │
-          ▼
-      Mihomo Core
+             /       |        \
+            /        |         \
+   mihomo-ctl  mihomo-manager  mihomo-setup
+       │            │              │
+       │            ├── Profile    ├── detect/adopt core
+       │            │    Manager   ├── bootstrap config
+       │            ├── Fetcher    └── user service
+       │            ├── Compiler
+       │            ├── Validator
+       │            ├── Runtime/Rollback
+       │            └── Doctor
+       │
+       ▼
+ Mihomo External Controller
+                    │
+                    ▼
+                Mihomo Core
 ```
 
 原则：
@@ -544,12 +544,15 @@ secret
 external-ui
 ```
 
-第一次启用 Profile Manager 时：
+首次启用配置档案能力时，用户只看到一次性的「设置 Mihomo」入口，内部执行：
 
 1. 获取当前 running core endpoint。
-2. 找到 running config。
-3. 保存当前 controller 信息。
-4. 编译所有 Profile 时强制保持这个 controller。
+2. 如果已有 controller 可连接，直接采用现有 core。
+3. 否则尝试已有的 Mihomo user service。
+4. 如果只有 binary，则创建插件自己的 bootstrap core 和
+   `omarchy-mihomo.service`，不覆盖用户配置。
+5. 安装 Profile Manager helper，并运行 doctor/连接检查。
+6. 编译所有 Profile 时强制保持这个 controller。
 
 如果当前是：
 
@@ -743,17 +746,66 @@ GET /configs
 
 ---
 
-# 十六、Core restart reconciliation
+# 十六、Zero-config onboarding 与 Core restart reconciliation
 
-第一版不要接管 Mihomo service lifecycle。
-
-仍保持 upstream：
+产品主流程必须允许普通用户只完成：
 
 ```text
-plugin controls external core
+安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点
 ```
 
-但是解决 Profile 在 core restart 后丢失的问题。
+用户不需要手写 `config.yaml`、配置 `external-controller` 或理解
+`Profile Manager`。`Service.qml` 通过 `bin/mihomo-setup` 消费 JSON 状态，状态至少包括：
+
+```text
+needs-core
+needs-setup
+controller-unavailable
+needs-profile
+ready
+attention
+```
+
+Setup 的采用顺序：
+
+```text
+reachable existing controller
+        ↓ no
+existing Mihomo user service
+        ↓ no
+plugin-owned bootstrap core
+```
+
+插件自有 core 使用独立目录和 unit：
+
+```text
+~/.config/omarchy-mihomo/core/config.yaml
+~/.config/systemd/user/omarchy-mihomo.service
+```
+
+bootstrap 只包含启动所需的最小字段：
+
+```yaml
+mixed-port: 7890
+mode: rule
+log-level: warning
+ipv6: false
+external-controller: 127.0.0.1:9090
+profile:
+  store-selected: true
+  store-fake-ip: true
+```
+
+不得在 bootstrap 中默认启用 TUN，也不得依赖 Geo 数据库。TUN 的默认设置为
+`managed + gvisor + enable=false`；用户从首页主动开启时才应用。首次点击首页 TUN
+时，如果当前 profile 是 `inherit`，先提示一次 ownership adoption，并复制当前的
+stack、route、detect、strict-route 和 dns-hijack 字段，再切换为 managed，不能静默套用
+一套新的默认值。
+
+插件不修改任意已有的 Mihomo service lifecycle；但允许管理自己创建的
+`omarchy-mihomo.service`。已有 core/service 仍按上面的采用顺序复用。
+
+在 core 重启后继续恢复当前 Profile。
 
 Service.qml 需要检测：
 
@@ -796,7 +848,7 @@ reconcile
 恢复用户选中的 Profile runtime
 ```
 
-第一阶段不用修改 systemd mihomo unit。
+第一阶段不用修改用户已有的 systemd mihomo unit；插件只管理自己的 `omarchy-mihomo.service`。
 
 ---
 
@@ -867,6 +919,37 @@ validate
 
 ---
 
+# 十七点一、Geo resources
+
+首次启动的 bootstrap 配置不得依赖 Geo 数据库；这一点已经由
+`bin/mihomo-setup` 保证。Profile 的 `source.yaml` 也不能因为 Geo 资源暂时不可下载而
+被覆盖成半成品。
+
+后续的产品默认值为：
+
+```text
+Geo resources
+Download source: Auto
+```
+
+manager 在编译/应用前负责识别 `geox-url` 和需要的资源，按以下顺序处理：
+
+```text
+本地缓存可用 → 复用
+      ↓
+主地址可用 → 下载并缓存
+      ↓
+已知 MetaCubeX 地址失败 → CDN mirror
+      ↓
+全部失败 → 保留旧 runtime，返回可重试的 Geo 错误
+```
+
+资源下载必须使用临时文件、大小限制、校验和原子 rename；不能修改 source/profile URL。
+UI 普通设置不显示 source 选择，只有失败时显示「重试」和「诊断」。这一项仍属于后续
+Phase，当前版本只保证 bootstrap 不依赖 Geo，并保留订阅提供的 `geox-url`。
+
+---
+
 # 十八、Profile Manager CLI
 
 实现稳定 JSON API：
@@ -892,6 +975,7 @@ omarchy-mihomo-manager profile update <id>
 omarchy-mihomo-manager profile update <id> --via-proxy
 
 omarchy-mihomo-manager profile select <id>
+omarchy-mihomo-manager doctor tun --stack gvisor
 
 omarchy-mihomo-manager profile delete <id>
 
@@ -1366,14 +1450,8 @@ Run:
 sudo setcap cap_net_admin,cap_net_raw=+ep /path/to/mihomo
 ```
 
-提供：
-
-```text
-Copy command
-Open terminal
-```
-
-但不要自己执行 sudo。
+预检会阻止本次 TUN 开启，并把建议命令放在 Diagnostics 中；用户可以自行复制到终端
+执行。插件不能替用户执行 sudo。
 
 ---
 
@@ -1434,6 +1512,7 @@ omarchy-mihomo-plugin/
 ├── bin/
 │   ├── mihomo-ctl
 │   ├── mihomo-manager
+│   ├── mihomo-setup
 │   └── install-manager
 │
 ├── ProfilesPage.qml
@@ -1451,6 +1530,8 @@ omarchy-mihomo-plugin/
 ├── I18n.qml
 │
 ├── tests/
+│   ├── bootstrap.sh
+│   ├── integration.sh
 │   └── fixtures/
 │       ├── subscription-basic.yaml
 │       ├── subscription-with-dns.yaml
@@ -1508,17 +1589,19 @@ SHA256SUMS
 ~/.local/share/omarchy-mihomo/bin/
 ```
 
-绝对禁止 silently download。
+绝对禁止 silently download。安装动作只由用户在首次设置流程中明确触发；普通用户不需要
+知道这个 helper 的名称。
 
-Profiles 第一次打开时如果 manager 不存在：
+首页/Profiles 页面只显示：
 
 ```text
-Profile Manager is not installed
+Mihomo needs one-time setup
 
-[ Install ]
+[ Set up Mihomo ]
 ```
 
-用户点击后才下载安装。
+点击后依次完成 core bootstrap、controller 检查和 helper 安装。helper 安装失败必须在
+页面中显示可操作错误，并保留重试入口。
 
 开发模式允许：
 
@@ -1572,6 +1655,10 @@ redirect / DNS resolution SSRF protection
 
 settings patch applies a burst of UI edits once
 
+bootstrap status/setup with fake core and user service
+
+TUN preflight checks capability and firewall compatibility
+
 atomic file write
 
 concurrent lock
@@ -1610,6 +1697,10 @@ OMARCHY_MIHOMO_HOME
 ```
 
 使用 fake binaries。
+
+`tests/bootstrap.sh` additionally exercises the missing-core and plugin-owned
+bootstrap path with a fake `systemctl`; it must never start a real core or
+touch the user's service manager.
 
 测试：
 
@@ -1721,6 +1812,20 @@ System Proxy ON。
 
 按以下阶段提交。
 
+### Phase 0 — Zero-config onboarding
+
+```text
+core detection
+plugin-owned bootstrap config
+existing-core adoption
+dedicated user service
+setup state machine
+first profile auto-selection
+```
+
+普通用户的成功路径是「安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点」。
+这一步不要求用户理解 external-controller、配置文件路径或 manager helper。
+
 ### Phase 1 — Manager Foundation
 
 ```text
@@ -1774,8 +1879,12 @@ active state
 ### Phase 4 — Network Settings
 
 ```text
+simple defaults
+progressive disclosure
 DNS Managed/Inherited
 TUN Managed/Inherited
+home TUN control
+inherit ownership adoption
 network settings
 recompile/apply
 ```
@@ -1804,6 +1913,17 @@ manager installer
 README
 ```
 
+### Phase 7 — Product simplification
+
+```text
+Profiles actions collapsed into one menu
+Home hides endpoint details after connection
+System Proxy as the recommended first capture mode
+TUN capability/firewall guidance on explicit enable
+Geo resource automatic fallback and cache
+README Quick Start reduced to the two-minute path
+```
+
 ---
 
 # 三十五、明确 Non-goals
@@ -1815,8 +1935,7 @@ WebDAV
 JavaScript enhancement scripts
 visual rule editor
 visual proxy group editor
-managed Mihomo core installer
-Mihomo auto upgrade
+silent Mihomo core download or auto upgrade
 sudo helper
 Windows
 macOS
@@ -1842,7 +1961,7 @@ Rollback
 
 # 三十六、README 需要重写相关章节
 
-最终 README 应明确解释：
+最终 README 应先给出普通用户两分钟快速开始，再在 Advanced/Troubleshooting 中解释：
 
 ```text
 Raw Config Mode
@@ -2029,7 +2148,8 @@ TUN 统一写作「TUN（虚拟网卡）」
 3. 数量文案必须处理单复数，避免 `1 profiles`、`1 rules` 一类输出。
 4. URL、Secret、token 和命令错误不能出现在普通列表或日志中；显式查看 URL 才返回原值。
 5. README、manifest、模块 ID、安装脚本、Go module 和 GitHub Release 地址必须使用同一仓库身份。
-6. README 同时提供英文和简体中文快速上手说明，并明确说明插件不启动 Mihomo、不自动执行 sudo。
+6. README 同时提供英文和简体中文快速上手说明；普通用户不需要手动配置 controller，
+   插件不会覆盖用户配置，也不会静默下载 core 或执行 sudo。
 
 文案改动的回归检查：
 

@@ -138,7 +138,7 @@ Item {
     width: checks.width - Style.space(36)
     visible: !root.svc || !root.svc.managerInstalled || checks.count === 0
     text: !root.svc || !root.svc.managerInstalled
-      ? (root.svc ? root.svc.t("diagnosticsUnavailable") : "Diagnostics require the Profile Manager.")
+      ? (root.svc ? root.svc.t("diagnosticsUnavailable") : "Complete one-time setup to run diagnostics.")
       : (root.svc.diagnosticsLoading ? root.svc.t("loading") : "")
     textFormat: Text.PlainText
     color: Util.alpha(root.fg, 0.5)

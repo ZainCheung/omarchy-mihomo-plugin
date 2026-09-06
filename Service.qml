@@ -31,6 +31,7 @@ Item {
     : Quickshell.env("HOME") + "/.config/omarchy/plugins/io.github.ZainCheung.mihomo"
   readonly property string runner: pluginDir + "/bin/mihomo-ctl"
   readonly property string managerRunner: pluginDir + "/bin/mihomo-manager"
+  readonly property string setupRunner: pluginDir + "/bin/mihomo-setup"
 
   // Profile operations have their own queue. Subscription requests can take up
   // to 30 seconds and must never block node/mode/system-proxy actions.
@@ -44,6 +45,19 @@ Item {
   property bool managerInstalled: false
   property bool managerChecking: false
   property bool managerInstalling: false
+  property string setupState: "checking"
+  property string setupMessage: ""
+  property string setupBinaryPath: ""
+  property string setupCoreHome: ""
+  property string setupServicePath: ""
+  property bool setupLoading: false
+  property bool setupManagerPending: false
+  property bool coreInstalling: false
+  property bool tunPreflightLoading: false
+  property bool tunPreflightTarget: false
+  property bool tunPreflightIssue: false
+  property bool tunOwnershipPromptVisible: false
+  property bool tunAdoptionTarget: false
   property var managerSettings: ({})
   property bool managerSettingsLoading: false
   property bool managerSettingsMutating: false
@@ -94,6 +108,7 @@ Item {
   property bool tunAutoRoute: false
   property string tunDnsHijack: ""
   property bool tunAutoDetect: false
+  property bool tunStrictRoute: false
 
   // OS-level system proxy. Not a core setting — Clash Verge keeps this on the
   // GUI side and writes gsettings / the session environment itself.
@@ -178,6 +193,11 @@ Item {
 
   readonly property string captureMode: tunEnabled ? "tun"
     : (sysproxyEnabled ? "sysproxy" : "off")
+
+  // The normal path is complete only when the core is reachable, the helper is
+  // available, and a profile has been selected. Raw-config users can still use
+  // the panel, but the home page uses this flag to present a short setup path.
+  readonly property bool onboardingComplete: connected && managerInstalled && activeProfile !== ""
 
   readonly property string modeLabel: t(mode === "global" ? "modeGlobal"
     : mode === "direct" ? "modeDirect"
@@ -329,6 +349,7 @@ Item {
         activeProfile = String(payload.activeProfile || "")
         activeProfileName = profileNameFor(activeProfile)
         syncManagedConfigInfo()
+        syncSetupState()
       } else if (Array.isArray(payload)) {
         profiles = payload
       }
@@ -349,6 +370,75 @@ Item {
     if (!ready || !managerInstalled || managerSettingsProc.running) return
     managerSettingsLoading = true
     managerSettingsProc.running = true
+  }
+
+  function refreshSetupStatus() {
+    if (!ready || setupStatusProc.running) return
+    setupStatusProc.running = true
+  }
+
+  function applySetupStatus(raw) {
+    try {
+      var data = JSON.parse(raw)
+      setupState = String(data.state || (data.ok ? "ready" : "attention"))
+      if (setupState === "needs-core") setupMessage = t("setupNeedsCore")
+      else if (setupState === "needs-setup") setupMessage = t("setupNeedsSetup")
+      else if (setupState === "controller-unavailable") setupMessage = t("setupControllerUnavailable")
+      else if (setupState === "ready") setupMessage = t("setupReady")
+      else if (setupState === "service-conflict") setupMessage = t("setupServiceConflict")
+      else if (setupState === "start-failed") setupMessage = t("setupStartFailed")
+      else setupMessage = String(data.message || "")
+      setupBinaryPath = String(data.binaryPath || "")
+      setupCoreHome = String(data.coreHome || "")
+      setupServicePath = String(data.service || "")
+    } catch (e) {
+      setupState = "attention"
+      setupMessage = t("parseError")
+    }
+    syncSetupState()
+  }
+
+  function syncSetupState() {
+    if (setupLoading || setupManagerPending) return
+    if (connected) {
+      if (managerInstalled) {
+        setupState = activeProfile === "" ? "needs-profile" : "ready"
+        setupMessage = activeProfile === "" ? t("setupAddProfile") : t("setupReady")
+      } else if (setupState !== "needs-core" && setupState !== "controller-unavailable") {
+        setupState = "needs-setup"
+        setupMessage = t("setupManagerPending")
+      }
+    }
+  }
+
+  function setup() {
+    if (!ready || setupLoading || setupProc.running) return
+    setupLoading = true
+    setupManagerPending = false
+    setupState = "setting-up"
+    setupMessage = t("setupInProgress")
+    setupProc.running = true
+  }
+
+  function finishSetup() {
+    setupLoading = false
+    setupManagerPending = false
+    setupState = connected && managerInstalled
+      ? (activeProfile === "" ? "needs-profile" : "ready")
+      : "starting"
+    setupMessage = connected && managerInstalled ? t("setupReady") : t("setupInProgress")
+    refreshSetupStatus()
+    refresh(true)
+    if (managerInstalled) {
+      refreshProfiles()
+      refreshManagerSettings()
+    }
+  }
+
+  function installCore() {
+    if (!ready || coreInstalling || coreInstallProc.running) return
+    coreInstalling = true
+    coreInstallProc.running = true
   }
 
   function setManagerSetting(key, value) {
@@ -431,8 +521,9 @@ Item {
     managerProc.running = true
   }
 
-  function installManager() {
+  function installManager(forSetup) {
     if (!ready || managerInstalling || installProc.running) return
+    if (forSetup === true) setupManagerPending = true
     managerInstalling = true
     installProc.running = true
   }
@@ -444,7 +535,7 @@ Item {
   function addProfile(url, name, intervalSec) {
     var interval = intervalSec === undefined ? 21600 : Number(intervalSec)
     enqueueManager(["profile", "add", "--url", url, "--name", name,
-                    "--update-interval", String(interval)])
+                    "--update-interval", String(interval), "--activate-if-empty"])
   }
   function selectProfile(id) { enqueueManager(["profile", "select", id]) }
   function updateProfile(id, viaProxy) {
@@ -615,6 +706,7 @@ Item {
       setIfChanged("tunDevice", String(tun.device || ""))
       setIfChanged("tunAutoRoute", tun["auto-route"] === true)
       setIfChanged("tunAutoDetect", tun["auto-detect-interface"] === true)
+      setIfChanged("tunStrictRoute", tun["strict-route"] === true)
       var hijack = tun["dns-hijack"]
       setIfChanged("tunDnsHijack", hijack && hijack.length ? hijack.join(", ") : "")
       setIfChanged("sniffing", configs.sniffing === true)
@@ -885,10 +977,109 @@ Item {
     }
   }
 
+  function requestTunPreflight(enabled) {
+    if (!enabled) {
+      applyTunEnabled(false)
+      return
+    }
+    if (activeProfile !== "" && managerSettingsLoading) {
+      notice = t("settingsApplying")
+      return
+    }
+    if (tunPreflightLoading) {
+      notice = t("tunCheckInProgress")
+      return
+    }
+    tunPreflightTarget = true
+    tunPreflightLoading = true
+    notice = t("tunCheckInProgress")
+    var stack = tunStack !== "" ? tunStack : "gvisor"
+    if (managerInstalled && managerRunner !== "") {
+      tunPreflightProc.command = ["/usr/bin/bash", managerRunner, "doctor", "tun",
+                                  "--stack", stack]
+    } else if (setupRunner !== "") {
+      tunPreflightProc.command = ["/usr/bin/bash", setupRunner, "preflight", "--stack", stack]
+    } else {
+      tunPreflightLoading = false
+      tunPreflightTarget = false
+      applyTunEnabled(true)
+      return
+    }
+    tunPreflightProc.running = true
+  }
+
+  function applyTunPreflight(raw) {
+    var checks = []
+    try {
+      var data = JSON.parse(raw)
+      checks = Array.isArray(data.checks) ? data.checks : []
+    } catch (e) {
+      tunPreflightLoading = false
+      tunPreflightTarget = false
+      tunPreflightIssue = true
+      notice = t("tunPreflightBlocked")
+      return
+    }
+    if (checks.length === 0) {
+      tunPreflightLoading = false
+      tunPreflightTarget = false
+      tunPreflightIssue = true
+      notice = t("tunPreflightBlocked")
+      return
+    }
+    for (var i = 0; i < checks.length; i++) {
+      var check = checks[i]
+      if ((check.id === "tunCapability" || check.id === "firewallTunCompatibility")
+          && check.status !== "ok") {
+        tunPreflightLoading = false
+        tunPreflightTarget = false
+        tunPreflightIssue = true
+        diagnostics = checks
+        notice = t("tunPreflightBlocked")
+        return
+      }
+    }
+    tunPreflightLoading = false
+    tunPreflightIssue = false
+    var target = tunPreflightTarget
+    tunPreflightTarget = false
+    applyTunEnabled(target)
+  }
+
   function setTun(enabled) {
     if (!ready) return
+    if (enabled) {
+      requestTunPreflight(true)
+      return
+    }
+    tunPreflightTarget = false
+    if (tunPreflightLoading) {
+      tunPreflightLoading = false
+      tunPreflightProc.running = false
+    }
+    applyTunEnabled(false)
+  }
+
+  function applyTunEnabled(enabled) {
+    if (!ready) return
     if (activeProfile !== "") {
-      notice = t("managedProfileHint")
+      if (!managerInstalled) {
+        notice = t("setupInProgress")
+        return
+      }
+      if (managerSettingsLoading || managerSettingsMutating) {
+        notice = t("settingsApplying")
+        return
+      }
+      var management = String(managerSettings.tunManagement || "managed")
+      if (management === "managed") {
+        tunEnabled = enabled
+        setManagerSetting("tun-enable", enabled ? "true" : "false")
+        notice = enabled ? t("tunOnNotice") : t("tunOffNotice")
+        return
+      }
+      tunAdoptionTarget = enabled
+      tunOwnershipPromptVisible = true
       return
     }
     tunEnabled = enabled
@@ -906,6 +1097,24 @@ Item {
     else tun["dns-hijack"] = ["any:53"]
     enqueue(["patch", "/configs", JSON.stringify({ tun: tun })],
             enabled ? t("tunOnNotice") : t("tunOffNotice"))
+  }
+
+  function cancelTunAdoption() {
+    tunOwnershipPromptVisible = false
+  }
+
+  function adoptTunControl() {
+    if (!ready || !managerInstalled) return
+    tunOwnershipPromptVisible = false
+    setManagerSetting("tun-management", "managed")
+    setManagerSetting("tun-enable", tunAdoptionTarget ? "true" : "false")
+    setManagerSetting("tun-stack", tunStack !== "" ? tunStack : "gvisor")
+    setManagerSetting("tun-auto-route", tunAutoRoute ? "true" : "false")
+    setManagerSetting("tun-auto-detect-interface", tunAutoDetect ? "true" : "false")
+    setManagerSetting("tun-strict-route", tunStrictRoute ? "true" : "false")
+    setManagerSetting("tun-dns-hijack", tunDnsHijack)
+    tunEnabled = tunAdoptionTarget
+    notice = tunAdoptionTarget ? t("tunOnNotice") : t("tunOffNotice")
   }
 
   function closeConnection(id) {
@@ -1063,18 +1272,29 @@ Item {
   // --- lifecycle -----------------------------------------------------------
 
   onConnectedChanged: {
-    if (!connected) return
+    if (!connected) {
+      if (setupState === "ready") {
+        setupState = "controller-unavailable"
+        setupMessage = lastError !== "" ? lastError : t("setupControllerUnavailable")
+      }
+      return
+    }
     var wasConnected = hadConnection
     hadConnection = true
     if (wasConnected) reconcileProfiles()
     else maybeInitialReconcile()
+    syncSetupState()
   }
+
+  onManagerInstalledChanged: syncSetupState()
+  onActiveProfileChanged: syncSetupState()
 
   onReadyChanged: {
     if (!ready) return
     managerInitialReconcileDone = false
     endpointProc.running = true
     langProc.running = true
+    setupStatusProc.running = true
     managerChecking = true
     profileCheckProc.running = true
     refresh(true)
@@ -1131,11 +1351,73 @@ Item {
   }
 
   Process {
+    id: setupStatusProc
+    command: ["/usr/bin/bash", root.setupRunner, "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySetupStatus(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.setupLoading) {
+        root.setupState = "attention"
+        root.setupMessage = root.t("setupStatusUnavailable")
+      }
+    }
+  }
+
+  Process {
+    id: setupProc
+    command: ["/usr/bin/bash", root.setupRunner, "setup"]
+    stdout: StdioCollector {
+      id: setupOut
+      waitForEnd: true
+      onStreamFinished: root.applySetupStatus(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.setupLoading = false
+        root.setupManagerPending = false
+        if (root.setupMessage === "") root.setupMessage = root.t("setupFailed")
+        root.setupState = root.setupState === "needs-core" ? "needs-core" : "attention"
+        root.refreshSetupStatus()
+        return
+      }
+      if (root.managerInstalled) root.finishSetup()
+      else root.installManager(true)
+    }
+  }
+
+  Process {
+    id: coreInstallProc
+    command: ["omarchy-launch-floating-terminal-with-presentation", "omarchy pkg add mihomo"]
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      root.coreInstalling = false
+      if (exitCode !== 0) {
+        root.setupState = "attention"
+        root.setupMessage = root.t("coreInstallFailed")
+        return
+      }
+      root.refreshSetupStatus()
+    }
+  }
+
+  Process {
     id: installProc
     command: ["/usr/bin/bash", root.pluginDir + "/bin/install-manager"]
-    stdout: StdioCollector { waitForEnd: true }
-    onExited: {
+    stdout: StdioCollector {
+      id: installOut
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
       root.managerInstalling = false
+      if (exitCode !== 0 && root.setupManagerPending) {
+        root.setupLoading = false
+        root.setupManagerPending = false
+        root.setupState = "attention"
+        root.setupMessage = root.actionErrorMessage(installOut.text) || root.t("managerInstallFailed")
+        return
+      }
       root.managerChecking = true
       profileCheckProc.running = true
     }
@@ -1172,6 +1454,15 @@ Item {
         root.managerInitialReconcileDone = false
       }
       else if (root.managerInstalled) root.refreshManagerSettings()
+      if (root.setupManagerPending) {
+        if (exitCode === 0 && root.managerInstalled) root.finishSetup()
+        else {
+          root.setupLoading = false
+          root.setupManagerPending = false
+          root.setupState = "attention"
+          root.setupMessage = root.t("managerInstallFailed")
+        }
+      }
     }
   }
 
@@ -1207,6 +1498,23 @@ Item {
       }
     }
     onExited: root.diagnosticsLoading = false
+  }
+
+  Process {
+    id: tunPreflightProc
+    command: ["/usr/bin/bash", root.managerRunner, "doctor", "tun", "--stack", "gvisor"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyTunPreflight(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.tunPreflightLoading) {
+        root.tunPreflightLoading = false
+        root.tunPreflightTarget = false
+        root.tunPreflightIssue = true
+        root.notice = root.t("tunPreflightBlocked")
+      }
+    }
   }
 
   Process {

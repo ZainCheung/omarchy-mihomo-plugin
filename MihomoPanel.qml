@@ -22,6 +22,9 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property string page: "home"
+  property bool advancedNavigation: false
+
+  readonly property var advancedPages: ["config", "connections", "rules", "diagnostics"]
 
   readonly property bool connected: svc ? svc.connected : false
   readonly property string modeLabel: svc ? svc.modeLabel : "--"
@@ -36,6 +39,10 @@ Panel {
 
   function goto(target) {
     if (page !== target) page = target
+  }
+
+  function isAdvancedPage(target) {
+    return advancedPages.indexOf(target) >= 0
   }
 
   function scrollCurrent(amount) {
@@ -266,10 +273,50 @@ Panel {
           NavButton { width: parent.width; pageId: "home";        glyph: "󰋜"; title: root.svc ? root.svc.t("navHome") : "Home" }
           NavButton { width: parent.width; pageId: "profiles";    glyph: "󰈙"; title: root.svc ? root.svc.t("navProfiles") : "Profiles" }
           NavButton { width: parent.width; pageId: "proxies";     glyph: "󰖟"; title: root.svc ? root.svc.t("navProxies") : "Proxies" }
-          NavButton { width: parent.width; pageId: "config";      glyph: "󰘚"; title: root.svc ? root.svc.t("navConfig") : "Config" }
-          NavButton { width: parent.width; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
-          NavButton { width: parent.width; pageId: "rules";       glyph: "󰘬"; title: root.svc ? root.svc.t("navRules") : "Rules" }
-          NavButton { width: parent.width; pageId: "diagnostics"; glyph: "󰒡"; title: root.svc ? root.svc.t("navDiagnostics") : "Diagnostics" }
+          Rectangle {
+            width: parent.width
+            height: Style.space(34)
+            radius: Style.cornerRadius
+            color: advancedMouse.containsMouse ? Util.alpha(root.fg, 0.07) : "transparent"
+
+            MouseArea {
+              id: advancedMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.advancedNavigation = !root.advancedNavigation
+            }
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.advancedNavigation ? "▾" : "▸"
+              color: Util.alpha(root.fg, 0.7)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              renderType: Text.NativeRendering
+            }
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(32)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.svc ? root.svc.t("advancedControls") : "Advanced"
+              textFormat: Text.PlainText
+              color: Util.alpha(root.fg, 0.85)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              renderType: Text.NativeRendering
+            }
+          }
+
+          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "config"; height: visible ? Style.space(34) : 0; pageId: "config";      glyph: "󰘚"; title: root.svc ? root.svc.t("navConfig") : "Config" }
+          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "connections"; height: visible ? Style.space(34) : 0; pageId: "connections"; glyph: "󰇧"; title: root.svc ? root.svc.t("navConnections") : "Connections" }
+          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "rules";       height: visible ? Style.space(34) : 0; pageId: "rules";       glyph: "󰘬"; title: root.svc ? root.svc.t("navRules") : "Rules" }
+          NavButton { width: parent.width; visible: root.advancedNavigation || root.page === "diagnostics"; height: visible ? Style.space(34) : 0; pageId: "diagnostics"; glyph: "󰒡"; title: root.svc ? root.svc.t("navDiagnostics") : "Diagnostics" }
         }
 
         Column {
@@ -328,6 +375,8 @@ Panel {
           anchors.fill: parent
           visible: root.page === "home"
           svc: root.svc
+          openProfiles: function() { root.goto("profiles") }
+          openDiagnostics: function() { root.goto("diagnostics") }
           fg: root.fg
           fontFamily: root.fontFamily
         }
@@ -437,6 +486,10 @@ Panel {
 
   onOpenedChanged: {
     if (opened && svc) svc.refreshPage()
+  }
+
+  onPageChanged: {
+    if (root.isAdvancedPage(page)) root.advancedNavigation = true
   }
 
   // --- inline components ---------------------------------------------------

@@ -1,32 +1,61 @@
 # Mihomo
 
-Omarchy bar plugin and native Mihomo client/control plane. It keeps the existing
-Home / Profiles / Proxies / Config / Connections / Rules / Diagnostics panel and
-adds a Go profile manager.
+An Omarchy Mihomo client for the bar and shell. Paste a subscription, choose a
+node, and use the system proxy; the advanced Mihomo control plane stays
+available when you need it.
 
-It supports remote subscriptions, local YAML imports, profile switching and
-updates, managed DNS/TUN settings, source/runtime/override inspection, atomic
-apply with rollback, and recovery after a core restart.
+The client supports remote subscriptions, local YAML imports, profile
+switching and updates, managed DNS/TUN settings, source/runtime/override
+inspection, atomic apply with rollback, and recovery after a core restart.
 
-The managed TUN default is `gvisor`. `system`, `gvisor`, and `mixed` remain
-available; an explicit `mixed` choice is preserved so the user can evaluate it
-against local firewall behavior.
+The managed TUN default is `gvisor`, but TUN is **off until the user enables
+it**. `system`, `gvisor`, and `mixed` remain available; an explicit `mixed`
+choice is preserved so it can be evaluated against local firewall behavior.
 
-## Modes
+## Quick start
 
-**Raw Config Mode** is the legacy-compatible mode. Until a profile is added or
-the current config is imported, the plugin reads the running core and keeps the
-existing runtime TUN and system-proxy controls.
+The normal path does not require a hand-written `config.yaml`, an
+`external-controller` setting, or knowledge of the manager CLI.
 
-**Managed Profile Mode** treats a subscription as **source configuration, not as
-the final Mihomo runtime configuration**. The manager stores source YAML and
-small overrides separately, compiles them into a runtime YAML, validates it with
-`mihomo -t -f`, then applies it transactionally.
+1. Install Mihomo if it is not already installed:
 
-```text
-Source Config → Global Override → Profile Override → Managed DNS/TUN
-              → Protected controller fields → validation → runtime/current.yaml
-```
+   ```sh
+   omarchy pkg add mihomo
+   ```
+
+2. Install and enable the plugin:
+
+   ```sh
+   omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
+   omarchy bar move io.github.ZainCheung.mihomo --section right
+   ```
+
+3. Open the Mihomo widget and click **Set up Mihomo** if prompted. On first
+   use, the plugin adopts a reachable core or creates its own small bootstrap
+   core and user service.
+
+4. Click **Add subscription**, paste the subscription URL, and choose a node.
+   The first profile is selected automatically. **System Proxy** is the
+   recommended starting point; TUN stays off until you explicitly turn it on.
+
+If TUN needs an extra Linux capability or conflicts with a firewall, the panel
+will keep the profile usable and point you to Diagnostics instead of making
+profile setup fail.
+
+## What first-time setup does
+
+The one-time setup action:
+
+- reuses an already reachable Mihomo core when possible;
+- tries an existing Mihomo user service before creating anything;
+- otherwise creates a plugin-owned bootstrap under
+  `~/.config/omarchy-mihomo/core/` and starts `omarchy-mihomo.service`;
+- installs the profile helper only as part of that explicit setup action.
+
+The bootstrap configuration is intentionally minimal. It enables a local
+controller so the client can connect, but it does not enable TUN or depend on
+Geo databases. The plugin never overwrites a user's existing Mihomo config or
+silently downloads a core binary.
 
 ## Install
 
@@ -35,9 +64,10 @@ omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --ena
 omarchy bar move io.github.ZainCheung.mihomo --section right
 ```
 
-Installation never downloads a helper or uses sudo. Profile Manager is installed
-only after an explicit user action (the bundled `bin/install-manager`), or can be
-provided during development with `OMARCHY_MIHOMO_MANAGER_BIN=/path/to/binary`.
+The plugin installation itself is lightweight. The profile helper is installed
+only as part of the explicit first-time setup action (the bundled
+`bin/install-manager`), or can be provided during development with
+`OMARCHY_MIHOMO_MANAGER_BIN=/path/to/binary`.
 
 ## Manager CLI
 
@@ -52,6 +82,7 @@ bin/mihomo-manager profile update <id> [--via-proxy]
 bin/mihomo-manager settings patch dns-enable true tun-stack gvisor
 bin/mihomo-manager reconcile
 bin/mihomo-manager doctor
+bin/mihomo-manager doctor tun --stack gvisor
 ```
 
 All manager mutations use `~/.config/omarchy-mihomo` (or
@@ -68,19 +99,40 @@ set either management mode to `inherit` to leave that section untouched.
 Managed profiles preserve the running core's `external-controller`, Unix
 controller, `secret`, and `external-ui` fields.
 
-## Existing panel
+## Advanced control
 
-The plugin still talks to the running Mihomo external controller through
-`bin/mihomo-ctl`. It does not start or install Mihomo. `mihomo-ctl` owns REST,
-traffic, proxy, connection, rule, reload, and Linux system-proxy operations;
-`mihomo-manager` owns persistent profiles, compilation, validation, apply, and
-rollback. See the original panel pages for live core status and controls.
+The plugin still exposes the full panel for users who need it: proxy groups,
+connections, rules, diagnostics, source/runtime/override inspection, and the
+manager CLI. These are implementation and troubleshooting surfaces, not
+required installation steps.
+
+For existing custom controllers, unusual service layouts, or Geo resource
+failures, see the troubleshooting and implementation notes in
+[`docs/implement.md`](docs/implement.md).
+
+## Advanced modes
+
+**Raw Config Mode** is the legacy-compatible mode. Until a profile is added or
+the current config is imported, the plugin reads the running core and keeps the
+existing runtime TUN and system-proxy controls.
+
+**Managed Profile Mode** treats a subscription as **source configuration, not as
+the final Mihomo runtime configuration**. The manager stores source YAML and
+small overrides separately, compiles them into a runtime YAML, validates it with
+`mihomo -t -f`, then applies it transactionally.
+
+```text
+Source Config → Global Override → Profile Override → Managed DNS/TUN
+              → Protected controller fields → validation → runtime/current.yaml
+```
 
 ## Development
 
 ```sh
 ./deploy
 cd manager && go test ./...
+./tests/integration.sh
+./tests/bootstrap.sh
 ```
 
 The repository is MIT licensed. It does not copy Clash Verge Rev source code;

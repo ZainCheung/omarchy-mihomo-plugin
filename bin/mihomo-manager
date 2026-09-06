@@ -16,6 +16,6 @@ for candidate in \
     exec "$candidate" "$@"
   fi
 done
-printf '{"ok":false,"stage":"manager","error":"Profile Manager is not installed"}\n'
-echo 'Profile Manager is not installed; install it explicitly with bin/install-manager or build it with ./deploy' >&2
+printf '{"ok":false,"stage":"setup","error":"Mihomo profile setup is not complete"}\n'
+echo 'Mihomo profile setup is not complete; open the plugin and choose "Set up Mihomo" first' >&2
 exit 1

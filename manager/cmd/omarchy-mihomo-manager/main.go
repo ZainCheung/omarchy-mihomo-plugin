@@ -71,7 +71,13 @@ func main() {
 	case "override":
 		overrideCommand(args[1:])
 	case "doctor":
-		emit(doctor.Run(st))
+		if len(args) > 1 && args[1] == "tun" {
+			doctorTUN(args[2:])
+		} else if len(args) > 1 {
+			fail("args", fmt.Errorf("unknown doctor command: %s", args[1]))
+		} else {
+			emit(doctor.Run(st))
+		}
 	case "redact":
 		if len(args) != 2 {
 			fail("args", fmt.Errorf("URL required"))
@@ -80,6 +86,18 @@ func main() {
 	default:
 		fail("args", fmt.Errorf("unknown command: %s", args[0]))
 	}
+}
+
+func doctorTUN(args []string) {
+	fs := flag.NewFlagSet("doctor tun", flag.ContinueOnError)
+	stack := fs.String("stack", "gvisor", "TUN stack to check")
+	if err := fs.Parse(args); err != nil {
+		fail("args", err)
+	}
+	if fs.NArg() != 0 {
+		fail("args", fmt.Errorf("unexpected doctor tun argument: %s", fs.Arg(0)))
+	}
+	emit(doctor.RunTUNPreflight(*stack))
 }
 
 func publicMeta(m profile.Meta) profile.Meta {
@@ -304,6 +322,7 @@ func addProfile(args []string) {
 	rawURL := fs.String("url", "", "subscription URL")
 	name := fs.String("name", "", "profile name")
 	interval := fs.Int("update-interval", 21600, "update interval in seconds")
+	activateIfEmpty := fs.Bool("activate-if-empty", false, "activate this profile when no profile is active")
 	if err := fs.Parse(args); err != nil {
 		fail("args", err)
 	}
@@ -330,19 +349,51 @@ func addProfile(args []string) {
 	meta := profile.TouchSuccess(profile.Meta{ID: id, Name: strings.TrimSpace(*name), Type: "remote", URL: *rawURL, UpdateIntervalSec: *interval}, result.ETag, result.LastModified)
 	setSubscriptionInfo(&meta, result)
 	err = runLocked(func() error {
+		idx, err := profile.LoadIndex(st)
+		if err != nil {
+			return err
+		}
+		oldIndex := profile.Index{Profiles: append([]string(nil), idx.Profiles...), ActiveProfile: idx.ActiveProfile}
+		activate := *activateIfEmpty && idx.ActiveProfile == ""
+		var oldState []byte
+		var hadState bool
+		var oldRuntime runtimeSnapshot
+		if activate {
+			oldState, hadState, err = snapshot(st.StatePath())
+			if err != nil {
+				return err
+			}
+			oldRuntime, err = snapshotRuntime()
+			if err != nil {
+				return err
+			}
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = profile.Delete(st, id)
+			}
+		}()
 		if err := profile.Add(st, meta, result.Body, []byte("{}\n")); err != nil {
 			return err
 		}
-		idx, err := profile.LoadIndex(st)
-		if err != nil {
-			_ = profile.Delete(st, id)
-			return err
-		}
 		idx.Profiles = append(idx.Profiles, id)
+		if activate {
+			if err = applyLocked(id, meta, result.Body); err != nil {
+				return err
+			}
+			idx.ActiveProfile = id
+		}
 		if err = profile.SaveIndex(st, idx); err != nil {
-			_ = profile.Delete(st, id)
+			if activate {
+				runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
+				stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+				indexErr := profile.SaveIndex(st, oldIndex)
+				return rollbackErrors(err, runtimeErr, stateErr, indexErr)
+			}
 			return err
 		}
+		committed = true
 		return nil
 	})
 	if err != nil {

@@ -24,6 +24,8 @@ jobs:
         run: go -C manager vet ./...
       - name: Manager integration tests
         run: ./tests/integration.sh
+      - name: Bootstrap setup tests
+        run: ./tests/bootstrap.sh
       - name: Validate plugin manifest
         run: |
           if command -v omarchy >/dev/null 2>&1; then

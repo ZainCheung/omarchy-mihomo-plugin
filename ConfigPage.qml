@@ -11,6 +11,9 @@ Item {
   property var svc: null
   property color fg: Color.popups.text
   property string fontFamily: Style.font.family
+  property bool customizeNetwork: false
+  property bool showAdvancedNetwork: false
+  property bool showCoreOverview: false
 
   ProfileDetail {
     id: detail
@@ -152,6 +155,7 @@ Item {
           lineHeight: 1.25
           renderType: Text.NativeRendering
         }
+
       }
 
       Card {
@@ -237,11 +241,20 @@ Item {
           lineHeight: 1.25
           renderType: Text.NativeRendering
         }
+
+        Button {
+          text: root.showCoreOverview
+            ? (root.svc ? root.svc.t("hideCoreOverview") : "Hide core details")
+            : (root.svc ? root.svc.t("advancedCoreDetails") : "Advanced core details")
+          onClicked: root.showCoreOverview = !root.showCoreOverview
+        }
       }
 
       Card {
         width: parent.width
         foreground: root.fg
+        visible: root.showCoreOverview
+        height: visible ? implicitHeight : 0
 
         PanelSectionHeader {
           text: root.svc ? root.svc.t("kernelOverview") : "Core overview"
@@ -317,15 +330,39 @@ Item {
         width: parent.width
         foreground: root.fg
         visible: root.svc && root.svc.managerInstalled
+        height: visible ? implicitHeight : 0
 
         PanelSectionHeader {
           text: root.svc ? root.svc.t("networkManagement") : "Network management"
           foreground: root.fg
           fontFamily: root.fontFamily
         }
+        Text {
+          width: parent.width
+          visible: !root.customizeNetwork
+          height: visible ? implicitHeight : 0
+          text: root.svc ? root.svc.t("networkAutomaticHint") : "Automatic network settings"
+          textFormat: Text.PlainText
+          color: Util.alpha(root.fg, 0.6)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+          renderType: Text.NativeRendering
+        }
+        Button {
+          text: root.customizeNetwork
+            ? (root.svc ? root.svc.t("hideNetworkCustomization") : "Hide customization")
+            : (root.svc ? root.svc.t("customizeNetwork") : "Customize")
+          onClicked: {
+            root.customizeNetwork = !root.customizeNetwork
+            if (!root.customizeNetwork) root.showAdvancedNetwork = false
+          }
+        }
         Row {
           width: parent.width
           spacing: Style.space(12)
+          visible: root.customizeNetwork
+          height: visible ? implicitHeight : 0
           PlainTextDropdown {
             width: (parent.width - Style.space(12)) / 2
             label: root.svc ? root.svc.t("dnsManagement") : "DNS"
@@ -365,6 +402,22 @@ Item {
           wrapMode: Text.WordWrap
           renderType: Text.NativeRendering
         }
+
+        Button {
+          visible: root.customizeNetwork
+          height: visible ? implicitHeight : 0
+          text: root.showAdvancedNetwork
+            ? (root.svc ? root.svc.t("hideAdvancedNetwork") : "Hide advanced network")
+            : (root.svc ? root.svc.t("advancedNetwork") : "Advanced network")
+          onClicked: root.showAdvancedNetwork = !root.showAdvancedNetwork
+        }
+
+        Column {
+          id: advancedNetwork
+          width: parent.width
+          visible: root.customizeNetwork && root.showAdvancedNetwork
+          height: visible ? implicitHeight : 0
+          spacing: Style.space(10)
 
         Row {
           width: parent.width
@@ -497,7 +550,7 @@ Item {
               {label: root.svc ? root.svc.t("enabled") : "Enabled", value: "true"},
               {label: root.svc ? root.svc.t("disabled") : "Disabled", value: "false"}
             ]
-            value: root.managerBool("tun", "enable", true) ? "true" : "false"
+            value: root.managerBool("tun", "enable", false) ? "true" : "false"
             foreground: root.fg
             fontFamily: root.fontFamily
             enabled: root.svc && root.managerIsManaged("tun") && !root.svc.managerSettingsMutating
@@ -610,20 +663,28 @@ Item {
             }
           }
         }
+        }
       }
 
-      PanelSectionHeader {
-        text: root.svc ? root.svc.t("ruleProviders") : "Rule providers"
-        foreground: root.fg
-        fontFamily: root.fontFamily
-      }
+      Column {
+        id: advancedProviders
+        width: parent.width
+        visible: root.showCoreOverview
+        height: visible ? implicitHeight : 0
+        spacing: Style.space(8)
 
-      Repeater {
-        model: root.svc ? root.svc.ruleProviders : []
+        PanelSectionHeader {
+          text: root.svc ? root.svc.t("ruleProviders") : "Rule providers"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
 
-        Rectangle {
-          required property var modelData
-          width: column.width
+        Repeater {
+          model: root.svc ? root.svc.ruleProviders : []
+
+          Rectangle {
+            required property var modelData
+            width: advancedProviders.width
           height: Style.space(42)
           radius: Style.cornerRadius
           color: ruleMouse.containsMouse ? Util.alpha(root.fg, 0.06) : Util.alpha(root.fg, 0.03)
@@ -681,10 +742,11 @@ Item {
             enabled: modelData.vehicleType !== "Inline"
             onClicked: root.svc.updateRuleProvider(modelData.name)
           }
+          }
         }
-      }
 
-      Item { width: 1; height: Style.space(4) }
+        Item { width: 1; height: Style.space(4) }
+      }
     }
   }
 }

@@ -27,6 +27,25 @@ type Report struct {
 	Checks []Check `json:"checks"`
 }
 
+// RunTUNPreflight checks the host-side prerequisites that can be evaluated
+// before a candidate enables TUN. Unlike Run, it does not need a readable
+// runtime config or an active profile; the UI uses it immediately before an
+// explicit TUN enable action.
+func RunTUNPreflight(stack string) Report {
+	r := Report{}
+	info, err := core.CoreInfo()
+	executable := ""
+	if err == nil {
+		executable = info.Exe
+	}
+	if executable == "" {
+		executable = core.Binary()
+	}
+	addCapabilityCheck(&r, executable)
+	addFirewallTUNPreflightCheck(&r, stack)
+	return r
+}
+
 // appendCheck keeps the human-readable CLI message while also carrying a
 // stable translation key for the QML diagnostics page. Dynamic values remain
 // in MessageArgs so the UI can translate the surrounding sentence.
@@ -359,6 +378,25 @@ func addFirewallTUNCompatibilityCheck(r *Report, configs map[string]any) {
 	appendCheck(r, "firewallTunCompatibility", "warning",
 		fmt.Sprintf("%s TUN stack may conflict with %s; try gVisor or adjust firewall rules", stack, firewall),
 		"diagnosticFirewallTunCompatibility", stack, firewall)
+}
+
+func addFirewallTUNPreflightCheck(r *Report, stack string) {
+	stack = strings.ToLower(strings.TrimSpace(stack))
+	if stack == "" {
+		stack = "gvisor"
+	}
+	if stack != "system" && stack != "mixed" {
+		appendCheck(r, "firewallTunCompatibility", "ok", stack)
+		return
+	}
+	firewall, active := activeFirewall()
+	if active {
+		appendCheck(r, "firewallTunCompatibility", "warning",
+			fmt.Sprintf("%s TUN stack may conflict with %s; try gVisor or adjust firewall rules", stack, firewall),
+			"diagnosticFirewallTunCompatibility", stack, firewall)
+		return
+	}
+	appendCheck(r, "firewallTunCompatibility", "ok", stack)
 }
 
 func firewallSensitiveTUNStack(configs map[string]any) (string, bool) {

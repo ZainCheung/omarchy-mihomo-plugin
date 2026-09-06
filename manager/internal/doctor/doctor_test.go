@@ -65,3 +65,14 @@ func TestFirewallSensitiveTUNStack(t *testing.T) {
 		t.Fatal("disabled TUN should not trigger a firewall compatibility hint")
 	}
 }
+
+func TestFirewallTUNPreflightDefaultsToGVisor(t *testing.T) {
+	report := Report{}
+	addFirewallTUNPreflightCheck(&report, "  GVISOR ")
+	if len(report.Checks) != 1 {
+		t.Fatalf("preflight checks = %#v", report.Checks)
+	}
+	if report.Checks[0].ID != "firewallTunCompatibility" || report.Checks[0].Status != "ok" || report.Checks[0].Message != "gvisor" {
+		t.Fatalf("preflight check = %#v", report.Checks[0])
+	}
+}

@@ -93,7 +93,10 @@ func DefaultSettings() Settings {
 			FakeIPFilter:          []string{"*.lan", "*.local", "localhost"},
 		},
 		TUN: TUNSettings{
-			Enable:              true,
+			// Do not enable TUN before the user explicitly asks for system-wide
+			// capture. A fresh core may not have cap_net_admin, and profile setup
+			// should succeed even when TUN is unavailable.
+			Enable:              false,
 			Stack:               DefaultTUNStack,
 			AutoRoute:           true,
 			AutoDetectInterface: true,

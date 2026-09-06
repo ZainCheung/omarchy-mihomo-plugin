@@ -10,8 +10,12 @@ import (
 )
 
 func TestDefaultSettingsUseGVisorTUNStack(t *testing.T) {
-	if got := DefaultSettings().TUN.Stack; got != DefaultTUNStack {
+	settings := DefaultSettings()
+	if got := settings.TUN.Stack; got != DefaultTUNStack {
 		t.Fatalf("default TUN stack = %q, want %q", got, DefaultTUNStack)
+	}
+	if settings.TUN.Enable {
+		t.Fatal("TUN must be disabled until the user explicitly enables it")
 	}
 }
 

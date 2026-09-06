@@ -81,6 +81,7 @@ Item {
   property bool profileRemoving: false
   property string profileRemoveId: ""
   property string profileRemoveName: ""
+  property var actionProfile: null
   ConfirmDialog {
     id: deleteConfirm
     anchors.fill: parent
@@ -94,13 +95,139 @@ Item {
     onConfirmed: { root.profileRemoving = false; root.svc.deleteProfile(root.profileRemoveId) }
   }
 
-  property string managerMissingText: root.svc && root.svc.managerInstalling ? root.svc.t("managerInstalling") : root.svc ? root.svc.t("managerMissingHint") : ""
+  Popup {
+    id: actionMenu
+    modal: true
+    focus: true
+    padding: Style.space(10)
+    width: Style.space(230)
+    anchors.centerIn: Overlay.overlay
+    background: Rectangle {
+      color: Color.popups.background
+      radius: Style.cornerRadius
+      border.width: 1
+      border.color: Util.alpha(root.fg, 0.2)
+    }
+    Column {
+      width: parent.width
+      spacing: Style.space(4)
+      Text {
+        width: parent.width
+        text: root.actionProfile ? String(root.actionProfile.name || "") : ""
+        textFormat: Text.PlainText
+        color: root.fg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        elide: Text.ElideRight
+        renderType: Text.NativeRendering
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("updateProfile") : "Update"
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: { root.svc.updateProfile(root.actionProfile.id, false); actionMenu.close() }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("updateViaProxy") : "Update via proxy"
+        visible: root.actionProfile && root.actionProfile.type === "remote"
+        enabled: root.svc && root.actionProfile && root.svc.connected && !root.svc.profileMutating
+        onClicked: { root.svc.updateProfileViaProxy(root.actionProfile.id); actionMenu.close() }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("renameProfile") : "Rename"
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          renameDialog.profileId = root.actionProfile.id
+          renameDialog.profileName = String(root.actionProfile.name || "")
+          actionMenu.close()
+          renameDialog.open()
+        }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("editProfileUrl") : "Edit URL"
+        visible: root.actionProfile && root.actionProfile.type === "remote"
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          var id = root.actionProfile.id
+          actionMenu.close()
+          urlDialog.profileId = id
+          urlDialog.profileUrl = ""
+          root.svc.readProfileURL(id, function(value) { urlDialog.profileUrl = value; urlDialog.open() })
+        }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("viewSource") : "View source"
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          detail.profileId = root.actionProfile.id
+          detail.profileName = String(root.actionProfile.name || "")
+          detail.showRuntime = false
+          detail.showOverride = false
+          detail.globalScope = false
+          actionMenu.close()
+          detail.open()
+        }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("viewRuntime") : "View runtime"
+        visible: root.actionProfile && root.svc && root.svc.activeProfile === root.actionProfile.id
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          detail.profileId = root.actionProfile.id
+          detail.profileName = String(root.actionProfile.name || "")
+          detail.showRuntime = true
+          detail.showOverride = false
+          detail.globalScope = false
+          actionMenu.close()
+          detail.open()
+        }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("viewOverride") : "View override"
+        visible: root.actionProfile !== null
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          detail.profileId = root.actionProfile.id
+          detail.profileName = String(root.actionProfile.name || "")
+          detail.showRuntime = false
+          detail.showOverride = true
+          detail.globalScope = false
+          actionMenu.close()
+          detail.open()
+        }
+      }
+      Button {
+        width: parent.width
+        text: root.svc ? root.svc.t("deleteProfile") : "Delete"
+        enabled: root.svc && root.actionProfile && !root.svc.profileMutating
+        onClicked: {
+          root.profileRemoveId = root.actionProfile.id
+          root.profileRemoveName = String(root.actionProfile.name || "")
+          actionMenu.close()
+          root.profileRemoving = true
+        }
+      }
+    }
+  }
+
+  property string setupMissingText: root.svc && root.svc.setupLoading
+    ? root.svc.t("setupInProgress")
+    : root.svc && root.svc.setupState === "needs-core"
+      ? root.svc.t("setupNeedsCore")
+      : root.svc ? root.svc.t("setupProfilesHint") : ""
 
   PageHeader {
     id: header
     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
     title: root.svc ? root.svc.t("profilesTitle") : "Profiles"
-    subtitle: root.svc && root.svc.managerInstalled ? root.countText(root.svc.profiles.length) : root.svc ? root.svc.t("managerMissing") : ""
+    subtitle: root.svc && root.svc.managerInstalled ? root.countText(root.svc.profiles.length) : root.svc ? root.svc.t("setupTitle") : ""
     foreground: root.fg; fontFamily: root.fontFamily
     PanelActionButton {
       iconText: "󰐕"
@@ -158,15 +285,11 @@ Item {
       }
       Row { id: actions; anchors.right: parent.right; anchors.rightMargin: Style.space(8); anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(4)
         PanelActionButton { iconText: "󰑐"; tooltipText: root.svc ? root.svc.t("updateProfile") : "Update"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: root.svc.updateProfile(modelData.id,false) }
-        PanelActionButton { iconText: "󰇧"; tooltipText: root.svc ? root.svc.t("updateViaProxy") : "Update via proxy"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && root.svc.connected && !root.svc.profileMutating; onClicked: root.svc.updateProfileViaProxy(modelData.id) }
-        PanelActionButton { iconText: "󰓝"; tooltipText: root.svc ? root.svc.t("renameProfile") : "Rename profile"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { renameDialog.profileId = modelData.id; renameDialog.profileName = String(modelData.name || ""); renameDialog.open(); } }
-        PanelActionButton { iconText: "󰖟"; tooltipText: root.svc ? root.svc.t("editProfileUrl") : "Edit profile URL"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && modelData.type === "remote" && !root.svc.profileMutating; onClicked: { urlDialog.profileId = modelData.id; urlDialog.profileUrl = ""; root.svc.readProfileURL(modelData.id, function(value) { urlDialog.profileUrl = value; urlDialog.open(); }); } }
-        PanelActionButton { iconText: "󰈙"; tooltipText: root.svc ? root.svc.t("profileSource") : "Source"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { detail.profileId = modelData.id; detail.profileName = String(modelData.name || ""); detail.showRuntime = false; detail.showOverride = false; detail.globalScope = false; detail.open() } }
-        PanelActionButton { iconText: "󰅖"; tooltipText: root.svc ? root.svc.t("deleteProfile") : "Delete"; foreground: root.fg; hoverColor: Color.urgent; fontFamily: root.fontFamily; enabled: root.svc && !root.svc.profileMutating; onClicked: { root.profileRemoveId = modelData.id; root.profileRemoveName = String(modelData.name || ""); root.profileRemoving = true } }
+        PanelActionButton { iconText: "󰇙"; tooltipText: root.svc ? root.svc.t("moreProfileActions") : "More actions"; foreground: root.fg; hoverColor: Color.accent; fontFamily: root.fontFamily; enabled: root.svc && root.svc.managerInstalled && !root.svc.profileMutating; onClicked: { root.actionProfile = modelData; actionMenu.open() } }
       }
     }
   }
-  Text { anchors.centerIn: list; width: list.width-Style.space(40); visible: list.count === 0; text: root.svc && !root.svc.managerInstalled ? root.managerMissingText : root.svc ? root.svc.t("noProfiles") : ""; color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; renderType: Text.NativeRendering }
-  Button { anchors.horizontalCenter: list.horizontalCenter; anchors.top: list.verticalCenter; visible: root.svc && !root.svc.managerInstalled; text: root.svc && root.svc.managerInstalling ? root.svc.t("installing") : root.svc ? root.svc.t("installManager") : "Install"; enabled: root.svc && !root.svc.managerInstalling; onClicked: root.svc.installManager() }
+  Text { anchors.centerIn: list; width: list.width-Style.space(40); visible: list.count === 0; text: root.svc && !root.svc.managerInstalled ? root.setupMissingText : root.svc ? root.svc.t("noProfiles") : ""; color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; renderType: Text.NativeRendering }
+  Button { anchors.horizontalCenter: list.horizontalCenter; anchors.top: list.verticalCenter; visible: root.svc && !root.svc.managerInstalled; text: root.svc && root.svc.setupState === "needs-core" ? (root.svc.coreInstalling ? root.svc.t("installing") : root.svc.t("installMihomo")) : root.svc && root.svc.setupLoading ? root.svc.t("settingUp") : root.svc ? root.svc.t("setupMihomo") : "Set up Mihomo"; enabled: root.svc && !root.svc.setupLoading && !root.svc.coreInstalling; onClicked: { if (root.svc.setupState === "needs-core") root.svc.installCore(); else root.svc.setup() } }
 
 }

@@ -184,6 +184,9 @@ export MIHOMO_BIN="$FAKE/mihomo"
 export FAKE_MIHOMO_BIN="$FAKE/mihomo"
 MANAGER="$TMP/manager"
 
+TUN_PREFLIGHT="$($MANAGER doctor tun --stack gvisor)"
+[[ "$TUN_PREFLIGHT" == *'firewallTunCompatibility'* ]] || { echo 'TUN preflight did not return firewall check' >&2; exit 1; }
+
 json_value() { python3 -c 'import json,sys; x=json.load(sys.stdin); print(eval(sys.argv[1]))' "$1"; }
 get_id() { json_value 'x["data"]["id"]'; }
 fail_cmd() { if "$MANAGER" "$@" >"$TMP/fail.out" 2>"$TMP/fail.err"; then echo "expected failure: $*" >&2; exit 1; fi; }
@@ -195,9 +198,11 @@ B_URL="http://127.0.0.1:$PORT/b"
 ETAG_URL="http://127.0.0.1:$PORT/etag"
 SECRET_URL="http://127.0.0.1:$PORT/a?token=integration-secret"
 
-A_JSON="$($MANAGER profile add --url "$A_URL" --name A)"
+A_JSON="$($MANAGER profile add --url "$A_URL" --name A --activate-if-empty)"
 A_ID="$(printf '%s' "$A_JSON" | get_id)"
 [[ "$A_JSON" == *'"download":20'* ]] || { echo 'subscription quota was not persisted' >&2; exit 1; }
+assert_file_contains "$STORE/profiles/index.json" '"activeProfile"'
+assert_file_contains "$STORE/profiles/index.json" "$A_ID"
 B_JSON="$($MANAGER profile add --url "$B_URL" --name B)"
 B_ID="$(printf '%s' "$B_JSON" | get_id)"
 ETAG_JSON="$($MANAGER profile add --url "$ETAG_URL" --name ETag)"
