@@ -76,13 +76,40 @@ func (c Compiler) Compile(input CompileInput) ([]byte, error) {
 	updated = (Compiler{Protected: protected}).protected(updated)
 	return Marshal(updated)
 }
+
+// normalizeManagedMixedPortListeners applies the manager-owned mixed-port
+// contract after source/global/profile layers have been merged.
+//
+// Mihomo's mixed-port already accepts both HTTP and SOCKS traffic. Therefore,
+// a source-level port or socks-port using the exact same port is redundant and
+// must be removed before listener-conflict validation.
+//
+// Transparent proxy listeners are intentionally not normalized here:
+// redir-port and tproxy-port have different semantics from mixed-port and a
+// collision with them must remain a validation error.
+func normalizeManagedMixedPortListeners(m map[string]any, mixedPort int) {
+	if mixedPort <= 0 {
+		return
+	}
+
+	if configPort(m["port"]) == mixedPort {
+		delete(m, "port")
+	}
+
+	if configPort(m["socks-port"]) == mixedPort {
+		delete(m, "socks-port")
+	}
+
+	// Apply the manager-owned value last so source/global/profile overrides
+	// cannot silently move the System Proxy endpoint.
+	m["mixed-port"] = mixedPort
+}
+
 func (c Compiler) managed(m map[string]any) map[string]any {
 	out := clone(m).(map[string]any)
+
 	if c.Settings.Network.MixedPort > 0 {
-		// mixed-port is a manager-owned network setting. Apply it after all
-		// source and override layers so a subscription cannot silently move
-		// the System Proxy endpoint.
-		out["mixed-port"] = c.Settings.Network.MixedPort
+		normalizeManagedMixedPortListeners(out, c.Settings.Network.MixedPort)
 	}
 	if c.Settings.DNSManagement == "managed" {
 		d := map[string]any{"enable": c.Settings.DNS.Enable, "ipv6": c.Settings.DNS.IPv6, "enhanced-mode": c.Settings.DNS.EnhancedMode, "fake-ip-range": c.Settings.DNS.FakeIPRange, "default-nameserver": toAny(c.Settings.DNS.DefaultNameserver), "nameserver": toAny(c.Settings.DNS.Nameserver), "proxy-server-nameserver": toAny(c.Settings.DNS.ProxyServerNameserver), "fake-ip-filter": toAny(c.Settings.DNS.FakeIPFilter)}

@@ -202,7 +202,7 @@ if [[ "${FAKE_VALIDATE_FAIL:-0}" == 1 ]]; then
 fi
 [[ "${1:-}" == "-t" && "${2:-}" == "-f" ]] || { echo 'bad validator args' >&2; exit 2; }
 [[ -s "$3" ]] || { echo 'empty config' >&2; exit 1; }
-grep -q '^port:' "$3" || { echo 'missing port' >&2; exit 1; }
+grep -qE '^(port|socks-port|mixed-port):' "$3" || { echo 'missing inbound listener' >&2; exit 1; }
 exit 0
 SH
 chmod +x "$FAKE/mihomo"
@@ -317,14 +317,27 @@ assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: warn'
 assert_file_contains "$STORE/profiles/index.json" "$A_ID"
 assert_file_contains "$STORE/runtime/state.json" "$A_ID"
 
-# Settings validation and a successful active apply.
+# Settings changes apply and recompile the active profile. The managed mixed
+# listener already serves HTTP and SOCKS traffic, so adopting a port that the
+# active subscription claims only as a plain HTTP/SOCKS listener is legal: the
+# redundant listener is dropped from the compiled runtime instead of reported
+# as a conflict. The profile source is never rewritten.
 $MANAGER settings set mixed-port 8890 >/dev/null
 assert_file_contains "$STORE/settings.json" '"mixedPort": 8890'
 assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 8890'
-fail_cmd settings set mixed-port 7891
-assert_file_contains "$TMP/fail.err" 'Port 7891 is already used'
+assert_file_contains "$STORE/runtime/current.yaml" 'port: 7891'
+$MANAGER settings set mixed-port 7891 >/dev/null
+assert_file_contains "$STORE/settings.json" '"mixedPort": 7891'
+assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 7891'
+if grep -Eq '^port: 7891' "$STORE/runtime/current.yaml"; then
+  echo 'redundant HTTP listener survived managed mixed-port normalization' >&2
+  exit 1
+fi
+assert_file_contains "$STORE/profiles/$A_ID/source.yaml" 'port: 7891'
+$MANAGER settings set mixed-port 8890 >/dev/null
 assert_file_contains "$STORE/settings.json" '"mixedPort": 8890'
 assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 8890'
+assert_file_contains "$STORE/runtime/current.yaml" 'port: 7891'
 export FAKE_VALIDATE_FAIL=1
 fail_cmd settings set mixed-port 8891
 unset FAKE_VALIDATE_FAIL

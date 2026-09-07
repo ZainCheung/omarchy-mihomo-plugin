@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -43,6 +44,345 @@ func TestManagedMixedPortWinsOverSourceAndOverrides(t *testing.T) {
 	}
 	if got := compiled["port"]; got != 7891 {
 		t.Fatalf("source HTTP port changed: %#v", got)
+	}
+}
+
+func TestManagedMixedPortNormalizesEquivalentHTTPAndSOCKSListeners(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		wantPresent map[string]int
+		wantAbsent  []string
+	}{
+		{
+			name: "remove matching HTTP port",
+			source: `
+port: 7890
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+			},
+			wantAbsent: []string{
+				"port",
+			},
+		},
+		{
+			name: "remove matching SOCKS port",
+			source: `
+socks-port: 7890
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+			},
+			wantAbsent: []string{
+				"socks-port",
+			},
+		},
+		{
+			name: "remove matching HTTP and SOCKS ports",
+			source: `
+port: 7890
+socks-port: 7890
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+			},
+			wantAbsent: []string{
+				"port",
+				"socks-port",
+			},
+		},
+		{
+			name: "preserve different HTTP port",
+			source: `
+port: 7891
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+				"port":       7891,
+			},
+		},
+		{
+			name: "preserve different SOCKS port",
+			source: `
+socks-port: 7891
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+				"socks-port": 7891,
+			},
+		},
+		{
+			name: "remove matching HTTP but preserve different SOCKS port",
+			source: `
+port: 7890
+socks-port: 7891
+`,
+			wantPresent: map[string]int{
+				"mixed-port": 7890,
+				"socks-port": 7891,
+			},
+			wantAbsent: []string{
+				"port",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := profile.DefaultSettings()
+			settings.Network.MixedPort = 7890
+
+			out, err := (Compiler{Settings: settings}).Compile(CompileInput{
+				Source: []byte(tt.source),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			compiled, err := Parse(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for key, want := range tt.wantPresent {
+				got := configPort(compiled[key])
+				if got != want {
+					t.Fatalf(
+						"%s = %d, want %d; compiled config: %s",
+						key,
+						got,
+						want,
+						out,
+					)
+				}
+			}
+
+			for _, key := range tt.wantAbsent {
+				if _, exists := compiled[key]; exists {
+					t.Fatalf(
+						"%s should have been removed; compiled config: %s",
+						key,
+						out,
+					)
+				}
+			}
+
+			if err := ValidateListenerConflicts(compiled); err != nil {
+				t.Fatalf(
+					"normalized config still has listener conflict: %v\n%s",
+					err,
+					out,
+				)
+			}
+		})
+	}
+}
+
+func TestManagedMixedPortDoesNotNormalizeTransparentProxyListeners(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{
+			name: "redir port conflict",
+			key:  "redir-port",
+		},
+		{
+			name: "tproxy port conflict",
+			key:  "tproxy-port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := profile.DefaultSettings()
+			settings.Network.MixedPort = 7890
+
+			source := []byte(fmt.Sprintf("%s: 7890\n", tt.key))
+
+			out, err := (Compiler{Settings: settings}).Compile(CompileInput{
+				Source: source,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			compiled, err := Parse(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := configPort(compiled["mixed-port"]); got != 7890 {
+				t.Fatalf("mixed-port = %d, want 7890", got)
+			}
+
+			if got := configPort(compiled[tt.key]); got != 7890 {
+				t.Fatalf(
+					"%s was unexpectedly removed or changed: %#v",
+					tt.key,
+					compiled[tt.key],
+				)
+			}
+
+			err = ValidateListenerConflicts(compiled)
+			if err == nil {
+				t.Fatalf(
+					"expected %s to conflict with managed mixed-port",
+					tt.key,
+				)
+			}
+
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf(
+					"conflict error does not mention %s: %v",
+					tt.key,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestManagedMixedPortNormalizesEquivalentListenerFromOverrides(t *testing.T) {
+	settings := profile.DefaultSettings()
+	settings.Network.MixedPort = 7890
+
+	tests := []struct {
+		name            string
+		source          string
+		globalOverride  string
+		profileOverride string
+		key             string
+	}{
+		{
+			name:           "global override HTTP port",
+			source:         "mode: rule\n",
+			globalOverride: "port: 7890\n",
+			key:            "port",
+		},
+		{
+			name:            "profile override HTTP port",
+			source:          "mode: rule\n",
+			profileOverride: "port: 7890\n",
+			key:             "port",
+		},
+		{
+			name:           "global override SOCKS port",
+			source:         "mode: rule\n",
+			globalOverride: "socks-port: 7890\n",
+			key:            "socks-port",
+		},
+		{
+			name:            "profile override SOCKS port",
+			source:          "mode: rule\n",
+			profileOverride: "socks-port: 7890\n",
+			key:             "socks-port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := (Compiler{Settings: settings}).Compile(CompileInput{
+				Source:          []byte(tt.source),
+				GlobalOverride:  []byte(tt.globalOverride),
+				ProfileOverride: []byte(tt.profileOverride),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			compiled, err := Parse(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := configPort(compiled["mixed-port"]); got != 7890 {
+				t.Fatalf("mixed-port = %d, want 7890", got)
+			}
+
+			if _, exists := compiled[tt.key]; exists {
+				t.Fatalf(
+					"%s should have been normalized away: %s",
+					tt.key,
+					out,
+				)
+			}
+
+			if err := ValidateListenerConflicts(compiled); err != nil {
+				t.Fatalf("unexpected listener conflict: %v", err)
+			}
+		})
+	}
+}
+
+func TestSubscriptionHTTPPort7890WorksWithManagedMixedPort7890(t *testing.T) {
+	settings := profile.DefaultSettings()
+	settings.Network.MixedPort = 7890
+
+	source := []byte(`
+port: 7890
+mode: rule
+proxies:
+  - name: test
+    type: http
+    server: 127.0.0.1
+    port: 8080
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - test
+rules:
+  - MATCH,Proxy
+`)
+
+	out, err := (Compiler{Settings: settings}).Compile(CompileInput{
+		Source: source,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, exists := compiled["port"]; exists {
+		t.Fatalf(
+			"redundant source HTTP listener was not removed: %s",
+			out,
+		)
+	}
+
+	if got := configPort(compiled["mixed-port"]); got != 7890 {
+		t.Fatalf("mixed-port = %d, want 7890", got)
+	}
+
+	if err := ValidateListenerConflicts(compiled); err != nil {
+		t.Fatalf(
+			"subscription with port:7890 should compile successfully: %v\n%s",
+			err,
+			out,
+		)
+	}
+
+	proxies, ok := compiled["proxies"].([]any)
+	if !ok || len(proxies) != 1 {
+		t.Fatalf("proxy definitions were modified: %#v", compiled["proxies"])
+	}
+
+	proxy, ok := proxies[0].(map[string]any)
+	if !ok {
+		t.Fatalf("proxy entry is invalid: %#v", proxies[0])
+	}
+
+	if got := configPort(proxy["port"]); got != 8080 {
+		t.Fatalf(
+			"nested proxy server port was modified: got %d, want 8080",
+			got,
+		)
 	}
 }
 
