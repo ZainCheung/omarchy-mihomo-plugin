@@ -1135,11 +1135,14 @@ Item {
     }
     for (var i = 0; i < checks.length; i++) {
       var check = checks[i]
-      if (check.id === "tunCapability" && check.status !== "ok") {
+      if ((check.id === "tunCapability" || check.id === "firewallTunCompatibility")
+          && check.status !== "ok") {
         tunPreflightLoading = false
         tunPreflightIssue = true
         diagnostics = checks
-        notice = t("tunPermissionRequired")
+        notice = check.id === "tunCapability"
+          ? t("tunPermissionRequired")
+          : t("tunPreflightBlocked")
         return
       }
     }
