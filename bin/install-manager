@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Explicit installer: no profile action downloads software implicitly.
+VERSION="${OMARCHY_MIHOMO_MANAGER_VERSION:-latest}"
+REPO="${OMARCHY_MIHOMO_MANAGER_REPO:-ZainCheung/omarchy-mihomo-plugin}"
+arch="$(uname -m)"
+case "$arch" in x86_64|amd64) asset="omarchy-mihomo-manager-linux-amd64";; aarch64|arm64) asset="omarchy-mihomo-manager-linux-arm64";; *) echo "unsupported architecture: $arch" >&2; exit 1;; esac
+if [[ "$VERSION" == "latest" ]]; then
+  base="https://github.com/$REPO/releases/latest/download"
+else
+  base="https://github.com/$REPO/releases/download/$VERSION"
+fi
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+curl --fail --location --max-time 30 -o "$tmp/$asset" "$base/$asset"
+curl --fail --location --max-time 30 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+(cd "$tmp" && grep "  $asset$" SHA256SUMS | sha256sum -c -)
+dest="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-mihomo/bin"
+mkdir -p "$dest"; chmod 700 "$dest"; install -m 700 "$tmp/$asset" "$dest/omarchy-mihomo-manager"
+echo "installed $dest/omarchy-mihomo-manager"
