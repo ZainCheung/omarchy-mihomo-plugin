@@ -72,6 +72,9 @@ controller apply does not discard the last known-good configuration.
 Installing the manager is an explicit action. `bin/install-manager` downloads
 the matching release asset from this repository and verifies `SHA256SUMS`; it
 does not run during plugin installation or silently install privileged software.
+The release is needed because plugin installation is source-only and does not
+compile Go on the user's machine. Releases provide prebuilt manager binaries
+for supported CPU architectures and a checksum file.
 
 ## Pages
 
@@ -208,3 +211,46 @@ the shell. Hot reload is unreliable; a restart is the sure way.
 omarchy plugin validate .
 omarchy-shell io.github.lijiawei0305-pixel.mihomo open
 ```
+
+## Testing
+
+The CI checks are dependency-light and use temporary directories and fake
+controller/core programs where possible:
+
+```sh
+go -C manager test ./...
+go -C manager vet ./...
+./tests/integration.sh
+./tests/bootstrap.sh
+./tests/sysproxy.sh
+./tests/validate-plugin.sh
+bash -n deploy bin/* tests/*.sh
+omarchy plugin validate .
+```
+
+For a local UI smoke test, run `./deploy` on an Omarchy machine, then open the
+widget with `omarchy-shell io.github.lijiawei0305-pixel.mihomo open`. Check both
+paths:
+
+1. Raw Config mode: use an independently running Mihomo core and verify core
+   discovery, node switching, Config reload, Proxies, Connections, Rules, and
+   system proxy.
+2. Managed mode: build or install the manager, then verify profile import,
+   activation, update, overrides, custom rules, Diagnostics, TUN with the
+   `gvisor` stack, and rollback after a failed apply.
+
+`tests/reset_mihomo_plugin_test.sh` is an optional, manual clean-room test for
+Arch/Omarchy onboarding. It is destructive: it asks for confirmation, stops
+named Mihomo services/processes, clears plugin state and proxy state, removes
+known Mihomo packages, installs the local checkout, and installs a supplied
+Arch package. It does not delete `~/.config/mihomo`, and it is not run in CI.
+
+```sh
+./tests/reset_mihomo_plugin_test.sh --package /path/to/mihomo.pkg.tar.zst
+```
+
+The script leaves the machine at the first-run state and tells the tester to
+open the widget and click **Set up Mihomo**. Keep the UI message and
+`journalctl --user -f` output if setup fails. A release containing the manager
+assets must exist for this final installer-path test; before that release,
+only use a temporary test repository through `OMARCHY_MIHOMO_MANAGER_REPO`.
