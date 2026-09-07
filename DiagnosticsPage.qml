@@ -18,6 +18,7 @@ Item {
   function statusText(status) {
     if (!root.svc) return String(status || "")
     if (status === "ok") return root.svc.t("diagnosticStatusOk")
+    if (status === "info") return root.svc.t("diagnosticStatusInfo")
     if (status === "error") return root.svc.t("diagnosticStatusError")
     return root.svc.t("diagnosticStatusWarning")
   }
@@ -32,9 +33,7 @@ Item {
     var fallback = String(check.message || "")
     if (!root.svc || !check.messageKey) return fallback
     var args = Array.isArray(check.messageArgs) ? check.messageArgs : []
-    if (args.length === 0) return root.svc.t(String(check.messageKey))
-    if (args.length === 1) return root.svc.t(String(check.messageKey), args[0])
-    return root.svc.t(String(check.messageKey), args[0], args[1])
+    return root.svc.t.apply(root.svc, [String(check.messageKey)].concat(args))
   }
 
   PageHeader {
@@ -82,7 +81,7 @@ Item {
     delegate: Rectangle {
       required property var modelData
       width: checks.width
-      implicitHeight: Math.max(Style.space(48), message.implicitHeight + Style.space(20))
+      implicitHeight: Math.max(Style.space(48), details.implicitHeight + Style.space(20))
       radius: Style.cornerRadius
       color: Util.alpha(root.fg, 0.04)
       border.width: 1
@@ -99,6 +98,7 @@ Item {
       }
 
       Column {
+        id: details
         anchors.left: status.right
         anchors.leftMargin: Style.space(10)
         anchors.right: parent.right
@@ -128,6 +128,16 @@ Item {
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
           renderType: Text.NativeRendering
+        }
+
+        Button {
+          visible: root.svc && modelData.id === "tunCapability"
+            && modelData.messageKey === "diagnosticCapabilityMissing"
+          text: root.svc && root.svc.tunFixLoading
+            ? root.svc.t("fixingTunPermission")
+            : root.svc ? root.svc.t("fixTunPermission") : "Fix & Enable"
+          enabled: root.svc && !root.svc.tunFixLoading
+          onClicked: root.svc.fixTunPermission()
         }
       }
     }

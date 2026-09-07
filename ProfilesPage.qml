@@ -308,7 +308,7 @@ Item {
     }
   }
   Text { anchors.centerIn: list; width: list.width-Style.space(40); visible: list.count === 0; text: root.svc && !root.svc.managerInstalled ? root.setupMissingText : root.svc ? root.svc.t("noProfiles") : ""; color: Util.alpha(root.fg,0.5); font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; renderType: Text.NativeRendering }
-  Button { anchors.horizontalCenter: list.horizontalCenter; anchors.top: list.verticalCenter; visible: root.svc && !root.svc.managerInstalled; text: root.svc && root.svc.setupState === "needs-core" ? (root.svc.coreInstalling ? root.svc.t("installing") : root.svc.t("installMihomo")) : root.svc && root.svc.setupLoading ? root.svc.t("settingUp") : root.svc ? root.svc.t("setupMihomo") : "Set up Mihomo"; enabled: root.svc && !root.svc.setupLoading && !root.svc.coreInstalling; onClicked: { if (root.svc.setupState === "needs-core") root.svc.installCore(); else root.svc.setup() } }
+  Button { anchors.horizontalCenter: list.horizontalCenter; anchors.top: list.verticalCenter; visible: root.svc && !root.svc.managerInstalled && root.svc.setupState !== "needs-core"; text: root.svc && root.svc.setupLoading ? root.svc.t("settingUp") : root.svc ? root.svc.t("setupMihomo") : "Set up Mihomo"; enabled: root.svc && !root.svc.setupLoading; onClicked: root.svc.setup() }
 
   Card {
     id: globalConfiguration

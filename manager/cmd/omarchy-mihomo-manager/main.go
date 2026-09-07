@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,12 @@ func main() {
 	case "doctor":
 		if len(args) > 1 && args[1] == "tun" {
 			doctorTUN(args[2:])
+		} else if len(args) > 1 && args[1] == "fix-tun-permission" {
+			result, err := doctor.FixTUNPermission()
+			if err != nil {
+				fail("doctor", err)
+			}
+			ok(result)
 		} else if len(args) > 1 {
 			fail("args", fmt.Errorf("unknown doctor command: %s", args[1]))
 		} else {
@@ -977,6 +984,7 @@ type compileOptions struct {
 	customRulesSet  bool
 	bindings        policy.Bindings
 	bindingsSet     bool
+	settings        *profile.Settings
 }
 
 type compilePlan struct {
@@ -1051,23 +1059,27 @@ func prepareCompile(id string, source []byte, options compileOptions) (compilePl
 		}
 		options.bindings = bindings
 		options.bindingsSet = true
-		plan, err := compileWithOptions(source, global, override, custom, bindings)
+		plan, err := compileWithOptions(source, global, override, custom, bindings, options.settings)
 		if err != nil {
 			return compilePlan{}, err
 		}
 		return compilePlan{compiled: plan, bindings: bindings, bindingChanged: changed}, nil
 	}
-	compiled, err := compileWithOptions(source, global, override, custom, bindings)
+	compiled, err := compileWithOptions(source, global, override, custom, bindings, options.settings)
 	if err != nil {
 		return compilePlan{}, err
 	}
 	return compilePlan{compiled: compiled, bindings: bindings}, nil
 }
 
-func compileWithOptions(source, global, override []byte, custom []rules.Rule, bindings policy.Bindings) ([]byte, error) {
-	settings, err := profile.LoadSettings(st)
-	if err != nil {
-		return nil, err
+func compileWithOptions(source, global, override []byte, custom []rules.Rule, bindings policy.Bindings, settingsOverride *profile.Settings) ([]byte, error) {
+	settings := settingsOverride
+	if settings == nil {
+		loaded, err := profile.LoadSettings(st)
+		if err != nil {
+			return nil, err
+		}
+		settings = &loaded
 	}
 	protected, err := protectedController()
 	if err != nil {
@@ -1075,7 +1087,7 @@ func compileWithOptions(source, global, override []byte, custom []rules.Rule, bi
 	}
 	return (config.Compiler{}).Compile(config.CompileInput{
 		Source: source, GlobalOverride: global, ProfileOverride: override,
-		CustomRules: custom, Bindings: bindings, Settings: settings, Protected: protected,
+		CustomRules: custom, Bindings: bindings, Settings: *settings, Protected: protected,
 	})
 }
 
@@ -1150,6 +1162,9 @@ func compileBytes(source, global, override []byte) ([]byte, error) {
 }
 
 func validateCandidate(b []byte) error {
+	if err := validateListenerConflicts(b); err != nil {
+		return err
+	}
 	f, err := os.CreateTemp(st.RuntimeDir(), ".validate-*.yaml")
 	if err != nil {
 		return err
@@ -1169,6 +1184,14 @@ func validateCandidate(b []byte) error {
 		return err
 	}
 	return validator.Validate(core.Binary(), path)
+}
+
+func validateListenerConflicts(b []byte) error {
+	parsed, err := config.Parse(b)
+	if err != nil {
+		return fmt.Errorf("parse candidate: %w", err)
+	}
+	return config.ValidateListenerConflicts(parsed)
 }
 
 func validateCompiled(source, override []byte) error {
@@ -1201,6 +1224,9 @@ func applyLockedWithOptions(id string, meta profile.Meta, source []byte, options
 		return fmt.Errorf("compile: %w", err)
 	}
 	b := plan.compiled
+	if err = validateListenerConflicts(b); err != nil {
+		return err
+	}
 	if err = st.WriteAtomic(st.CandidatePath(), b); err != nil {
 		return err
 	}
@@ -1923,29 +1949,40 @@ func settingsCommand(args []string) {
 		if err = validateSettings(next); err != nil {
 			return err
 		}
-		if err = profile.SaveSettings(st, next); err != nil {
-			return err
-		}
 		next.TUN.Stack = profile.NormalizeTUNStack(next.TUN.Stack)
 
 		idx, err := profile.LoadIndex(st)
 		if err != nil {
-			_ = profile.SaveSettings(st, old)
 			return err
 		}
 		if idx.ActiveProfile == "" {
-			return nil
+			return profile.SaveSettings(st, next)
 		}
 		meta, err := profile.LoadMeta(st, idx.ActiveProfile)
 		if err != nil {
-			_ = profile.SaveSettings(st, old)
 			return err
 		}
-		if err = applyLocked(idx.ActiveProfile, meta, nil); err != nil {
-			if restoreErr := profile.SaveSettings(st, old); restoreErr != nil {
-				return rollbackErrors(err, restoreErr)
-			}
+		oldState, hadState, err := snapshot(st.StatePath())
+		if err != nil {
 			return err
+		}
+		oldRuntime, err := snapshotRuntime()
+		if err != nil {
+			return err
+		}
+		oldBinding, hadBinding, err := snapshot(st.BindingsPath(idx.ActiveProfile))
+		if err != nil {
+			return err
+		}
+		if err = applyLockedWithOptions(idx.ActiveProfile, meta, nil, compileOptions{settings: &next}); err != nil {
+			return err
+		}
+		if err = profile.SaveSettings(st, next); err != nil {
+			runtimeErr := restoreRuntimeWithFallback(oldRuntime, restoreMode{applyPreviousIfCurrentMissing: true})
+			stateErr := restoreSnapshot(st.StatePath(), oldState, hadState)
+			bindingErr := restoreSnapshot(st.BindingsPath(idx.ActiveProfile), oldBinding, hadBinding)
+			settingsErr := profile.SaveSettings(st, old)
+			return rollbackErrors(err, runtimeErr, stateErr, bindingErr, settingsErr)
 		}
 		return nil
 	})
@@ -1991,6 +2028,12 @@ func setSetting(settings *profile.Settings, key, value string) error {
 		settings.DNSManagement = strings.ToLower(strings.TrimSpace(value))
 	case "tun-management":
 		settings.TUNManagement = strings.ToLower(strings.TrimSpace(value))
+	case "mixed-port":
+		v, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("mixed-port must be an integer")
+		}
+		settings.Network.MixedPort = v
 	case "dns-enable":
 		v, err := parseBoolSetting(value)
 		if err != nil {
@@ -2050,6 +2093,9 @@ func setSetting(settings *profile.Settings, key, value string) error {
 }
 
 func validateSettings(settings profile.Settings) error {
+	if settings.Network.MixedPort < 1 || settings.Network.MixedPort > 65535 {
+		return fmt.Errorf("mixed-port must be between 1 and 65535")
+	}
 	if settings.DNSManagement != "managed" && settings.DNSManagement != "inherit" {
 		return fmt.Errorf("dns-management must be managed or inherit")
 	}

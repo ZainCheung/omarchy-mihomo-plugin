@@ -93,3 +93,67 @@ func ParseOptional(data []byte) (map[string]any, error) {
 	return Parse(data)
 }
 func Marshal(m map[string]any) ([]byte, error) { return yaml.Marshal(m) }
+
+// ValidateListenerConflicts provides a friendly error before Mihomo's own
+// validator runs. Mihomo remains authoritative; this check only turns the
+// common duplicate-listener case into an actionable message.
+func ValidateListenerConflicts(m map[string]any) error {
+	type listener struct {
+		key   string
+		label string
+	}
+	listeners := []listener{
+		{key: "mixed-port", label: "mixed-port"},
+		{key: "port", label: "HTTP port"},
+		{key: "socks-port", label: "SOCKS port"},
+		{key: "redir-port", label: "redir-port"},
+		{key: "tproxy-port", label: "tproxy-port"},
+	}
+	used := map[int]string{}
+	for _, item := range listeners {
+		port := configPort(m[item.key])
+		if port <= 0 {
+			continue
+		}
+		if previous, ok := used[port]; ok {
+			return fmt.Errorf("Port %d is already used by %s (also configured as %s)", port, previous, item.label)
+		}
+		used[port] = item.label
+	}
+	return nil
+}
+
+func configPort(value any) int {
+	switch number := value.(type) {
+	case int:
+		return number
+	case int8:
+		return int(number)
+	case int16:
+		return int(number)
+	case int32:
+		return int(number)
+	case int64:
+		return int(number)
+	case uint:
+		return int(number)
+	case uint8:
+		return int(number)
+	case uint16:
+		return int(number)
+	case uint32:
+		return int(number)
+	case uint64:
+		return int(number)
+	case float64:
+		return int(number)
+	case float32:
+		return int(number)
+	case string:
+		var port int
+		_, _ = fmt.Sscanf(strings.TrimSpace(number), "%d", &port)
+		return port
+	default:
+		return 0
+	}
+}

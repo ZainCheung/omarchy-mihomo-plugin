@@ -549,7 +549,7 @@ external-ui
 1. 获取当前 running core endpoint。
 2. 如果已有 controller 可连接，直接采用现有 core。
 3. 否则尝试已有的 Mihomo user service。
-4. 如果只有 binary，则创建插件自己的 bootstrap core 和
+4. 如果只有 binary，则围绕已检测到的 binary 创建插件自己的 bootstrap 配置和
    `omarchy-mihomo.service`，不覆盖用户配置。
 5. 安装 Profile Manager helper，并运行 doctor/连接检查。
 6. 编译所有 Profile 时强制保持这个 controller。
@@ -751,7 +751,7 @@ GET /configs
 产品主流程必须允许普通用户只完成：
 
 ```text
-安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点
+用户自行安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点
 ```
 
 用户不需要手写 `config.yaml`、配置 `external-controller` 或理解
@@ -773,10 +773,10 @@ reachable existing controller
         ↓ no
 existing Mihomo user service
         ↓ no
-plugin-owned bootstrap core
+plugin-owned bootstrap config/service around the detected binary
 ```
 
-插件自有 core 使用独立目录和 unit：
+插件自有 bootstrap service 使用独立目录和 unit：
 
 ```text
 ~/.config/omarchy-mihomo/core/config.yaml
@@ -1702,6 +1702,10 @@ OMARCHY_MIHOMO_HOME
 bootstrap path with a fake `systemctl`; it must never start a real core or
 touch the user's service manager.
 
+`tests/sysproxy.sh` checks that System Proxy accepts only the reported
+`mixed-port` and only applies the desktop proxy after a real local TCP listener
+is available.
+
 测试：
 
 ```text
@@ -1823,7 +1827,7 @@ setup state machine
 first profile auto-selection
 ```
 
-普通用户的成功路径是「安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点」。
+普通用户的成功路径是「用户自行安装 Mihomo → 安装插件 → 设置 Mihomo → 粘贴订阅 → 选择节点」。
 这一步不要求用户理解 external-controller、配置文件路径或 manager helper。
 
 ### Phase 1 — Manager Foundation
@@ -2239,6 +2243,7 @@ Save & Apply 的回滚行为。发布前还应执行：
 cd manager && go test ./...
 cd .. && go vet ./manager/...
 ./tests/integration.sh
+./tests/sysproxy.sh
 ./tests/validate-plugin.sh
 omarchy plugin validate .
 ```

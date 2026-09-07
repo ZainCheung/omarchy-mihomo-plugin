@@ -78,10 +78,32 @@ func MixedPort() (int, error) {
 	if e = json.Unmarshal(b, &x); e != nil {
 		return 0, e
 	}
-	if port := HTTPProxyPort(x); port > 0 {
+	if port := MixedPortFromConfig(x); port > 0 {
 		return port, nil
 	}
-	return 0, fmt.Errorf("mihomo has no mixed or HTTP proxy port")
+	return 0, fmt.Errorf("mihomo has no mixed-port")
+}
+
+// MixedPortFromConfig returns only Mihomo's mixed listener. A regular HTTP
+// port is intentionally not a substitute: the desktop System Proxy writes
+// HTTP, HTTPS, and SOCKS to one endpoint and therefore requires mixed-port.
+func MixedPortFromConfig(config map[string]any) int {
+	switch number := config["mixed-port"].(type) {
+	case float64:
+		if number > 0 {
+			return int(number)
+		}
+	case json.Number:
+		value, _ := number.Int64()
+		if value > 0 {
+			return int(value)
+		}
+	case int:
+		if number > 0 {
+			return number
+		}
+	}
+	return 0
 }
 
 // HTTPProxyPort returns a port that can accept an HTTP proxy request. A

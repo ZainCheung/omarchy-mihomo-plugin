@@ -48,6 +48,40 @@ func TestDoctorNetworkValues(t *testing.T) {
 	}
 }
 
+func TestDisabledTUNIsInformationalAndSkipsInterfaceProbe(t *testing.T) {
+	report := Report{}
+	addNetworkChecks(&report, map[string]any{
+		"tun": map[string]any{"enable": false},
+		"dns": map[string]any{"enable": true, "enhanced-mode": "fake-ip"},
+	})
+	checks := map[string]Check{}
+	for _, check := range report.Checks {
+		checks[check.ID] = check
+	}
+	if checks["tunEnabled"].Status != "info" {
+		t.Fatalf("disabled TUN status = %#v", checks["tunEnabled"])
+	}
+	if _, ok := checks["tunInterface"]; ok {
+		t.Fatal("disabled TUN should not probe for an interface")
+	}
+}
+
+func TestDNSChecksFallBackToRuntimeConfig(t *testing.T) {
+	report := Report{}
+	addNetworkChecksWithRuntime(&report, map[string]any{
+		"tun": map[string]any{"enable": false},
+	}, map[string]any{
+		"dns": map[string]any{"enable": true, "enhanced-mode": "fake-ip"},
+	})
+	checks := map[string]Check{}
+	for _, check := range report.Checks {
+		checks[check.ID] = check
+	}
+	if checks["dnsEnabled"].Status != "ok" || checks["dnsMode"].Message != "fake-ip" {
+		t.Fatalf("DNS runtime fallback = %#v", checks)
+	}
+}
+
 func TestFirewallSensitiveTUNStack(t *testing.T) {
 	if stack, ok := firewallSensitiveTUNStack(map[string]any{
 		"tun": map[string]any{"enable": true, "stack": "mixed"},

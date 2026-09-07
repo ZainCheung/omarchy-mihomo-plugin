@@ -212,7 +212,7 @@ preflight() {
   elif ! command -v getcap >/dev/null 2>&1; then
     cap_message="getcap is unavailable"
     cap_key="diagnosticGetcapUnavailable"
-  elif getcap_output="$(getcap "$executable" 2>/dev/null || true)"; [[ "$getcap_output" == *cap_net_admin* ]]; then
+  elif getcap_output="$(getcap "$executable" 2>/dev/null || true)"; [[ "$getcap_output" == *cap_net_admin* && "$getcap_output" == *cap_net_raw* ]]; then
     cap_status="ok"
     cap_message="$getcap_output"
     cap_key=""

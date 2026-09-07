@@ -11,11 +11,33 @@ import (
 
 func TestDefaultSettingsUseGVisorTUNStack(t *testing.T) {
 	settings := DefaultSettings()
+	if got := settings.Network.MixedPort; got != 7890 {
+		t.Fatalf("default mixed port = %d, want 7890", got)
+	}
 	if got := settings.TUN.Stack; got != DefaultTUNStack {
 		t.Fatalf("default TUN stack = %q, want %q", got, DefaultTUNStack)
 	}
 	if settings.TUN.Enable {
 		t.Fatal("TUN must be disabled until the user explicitly enables it")
+	}
+}
+
+func TestLoadSettingsMigratesMissingNetworkSettings(t *testing.T) {
+	s := &store.Store{Home: t.TempDir()}
+	if err := s.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	legacy := DefaultSettings()
+	legacy.Network.MixedPort = 0
+	if err := s.WriteJSON(s.SettingsPath(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSettings(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Network.MixedPort != 7890 {
+		t.Fatalf("migrated mixed port = %d, want 7890", got.Network.MixedPort)
 	}
 }
 

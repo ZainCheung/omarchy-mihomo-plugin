@@ -18,7 +18,7 @@ export FAKE_CONFIG="$FAKE/config.yaml"
 export FAKE_FAIL_CONFIG_ONCE="$FAKE/fail-config-once"
 
 cat >"$FAKE/config.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: warn
 external-controller: 127.0.0.1:9090
@@ -27,7 +27,7 @@ YAML
 cp "$FAKE/config.yaml" "$FAKE/live.yaml"
 
 cat >"$FAKE/http/a.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: info
 proxies:
@@ -41,7 +41,7 @@ rules:
   - MATCH,Select
 YAML
 cat >"$FAKE/http/b.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: debug
 proxies:
@@ -61,7 +61,7 @@ rules:
   - MATCH,Proxy B
 YAML
 cat >"$FAKE/http/c.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: info
 proxies:
@@ -78,7 +78,7 @@ rules:
   - MATCH,Proxy C
 YAML
 cat >"$FAKE/http/etag.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: error
 proxies:
@@ -250,6 +250,8 @@ RAW_URL="$($MANAGER profile url "$SECRET_ID")"
 
 $MANAGER profile select "$A_ID" >/dev/null
 assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: info'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'mixed-port: 7890'
+assert_file_contains "$FAKE_LIVE_CONFIG" 'port: 7891'
 assert_file_contains "$STORE/runtime/state.json" '"secret": "test-secret"'
 $MANAGER profile select "$B_ID" >/dev/null
 assert_file_contains "$FAKE_LIVE_CONFIG" 'log-level: debug'
@@ -316,6 +318,20 @@ assert_file_contains "$STORE/profiles/index.json" "$A_ID"
 assert_file_contains "$STORE/runtime/state.json" "$A_ID"
 
 # Settings validation and a successful active apply.
+$MANAGER settings set mixed-port 8890 >/dev/null
+assert_file_contains "$STORE/settings.json" '"mixedPort": 8890'
+assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 8890'
+fail_cmd settings set mixed-port 7891
+assert_file_contains "$TMP/fail.err" 'Port 7891 is already used'
+assert_file_contains "$STORE/settings.json" '"mixedPort": 8890'
+assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 8890'
+export FAKE_VALIDATE_FAIL=1
+fail_cmd settings set mixed-port 8891
+unset FAKE_VALIDATE_FAIL
+assert_file_contains "$STORE/settings.json" '"mixedPort": 8890'
+assert_file_contains "$STORE/runtime/current.yaml" 'mixed-port: 8890'
+fail_cmd settings set mixed-port 0
+assert_file_contains "$TMP/fail.err" 'between 1 and 65535'
 $MANAGER settings set dns-management inherit >/dev/null
 assert_file_contains "$STORE/settings.json" '"dnsManagement": "inherit"'
 $MANAGER settings set dns-enable false >/dev/null
@@ -390,7 +406,7 @@ assert_file_contains "$FAKE_LIVE_CONFIG" 'DOMAIN-SUFFIX,openai.com,Auto B'
 cp "$STORE/profiles/$B_ID/source.yaml" "$TMP/b-before-stale.yaml"
 cp "$STORE/runtime/current.yaml" "$TMP/current-b-before-stale.yaml"
 cat >"$FAKE/http/b.yaml" <<'YAML'
-port: 7890
+port: 7891
 mode: rule
 log-level: newer
 proxies:

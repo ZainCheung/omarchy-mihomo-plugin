@@ -98,7 +98,11 @@ Item {
       foreground: root.fg
       hoverColor: Color.accent
       fontFamily: root.fontFamily
-      onClicked: if (root.svc) root.svc.refresh()
+      onClicked: {
+        if (!root.svc) return
+        root.svc.refreshSetupStatus()
+        root.svc.refresh()
+      }
     }
   }
 
@@ -143,7 +147,6 @@ Item {
           width: parent.width
           text: {
             if (!root.svc) return ""
-            if (root.svc.coreInstalling) return root.svc.t("coreInstalling")
             if (root.svc.setupLoading) return root.svc.t("setupInProgress")
             if (root.svc.setupState === "needs-core") return root.svc.t("setupNeedsCore")
             if (root.svc.setupState === "needs-profile") return root.svc.t("setupAddProfile")
@@ -159,40 +162,8 @@ Item {
           renderType: Text.NativeRendering
         }
 
-        Rectangle {
-          width: parent.width
-          visible: root.svc && root.svc.setupState === "needs-core"
-          implicitHeight: installCommand.implicitHeight + Style.space(12)
-          radius: Style.cornerRadius
-          color: Util.alpha(root.fg, 0.05)
-          border.width: 1
-          border.color: Util.alpha(root.fg, 0.12)
-
-          Text {
-            id: installCommand
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.leftMargin: Style.space(10)
-            anchors.rightMargin: Style.space(10)
-            text: "omarchy pkg add mihomo"
-            textFormat: Text.PlainText
-            color: root.fg
-            font.family: "monospace"
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-            renderType: Text.NativeRendering
-          }
-        }
-
         Row {
           spacing: Style.space(8)
-          Button {
-            visible: root.svc && root.svc.setupState === "needs-core"
-            text: root.svc && root.svc.coreInstalling ? root.svc.t("installing") : root.svc ? root.svc.t("installMihomo") : "Install Mihomo"
-            enabled: root.svc && !root.svc.coreInstalling && !root.svc.setupLoading
-            onClicked: root.svc.installCore()
-          }
           Button {
             visible: root.svc && root.svc.setupState !== "needs-core" && root.svc.setupState !== "needs-profile"
             text: root.svc && root.svc.setupLoading ? root.svc.t("settingUp") : root.svc ? root.svc.t("setupMihomo") : "Set up Mihomo"

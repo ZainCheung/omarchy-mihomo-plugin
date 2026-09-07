@@ -40,10 +40,14 @@ type Index struct {
 	ActiveProfile string   `json:"activeProfile,omitempty"`
 }
 type Settings struct {
-	DNSManagement string      `json:"dnsManagement"`
-	TUNManagement string      `json:"tunManagement"`
-	DNS           DNSSettings `json:"dns"`
-	TUN           TUNSettings `json:"tun"`
+	Network       NetworkSettings `json:"network"`
+	DNSManagement string          `json:"dnsManagement"`
+	TUNManagement string          `json:"tunManagement"`
+	DNS           DNSSettings     `json:"dns"`
+	TUN           TUNSettings     `json:"tun"`
+}
+type NetworkSettings struct {
+	MixedPort int `json:"mixedPort"`
 }
 type DNSSettings struct {
 	Enable                bool     `json:"enable"`
@@ -80,6 +84,9 @@ func NormalizeTUNStack(stack string) string {
 
 func DefaultSettings() Settings {
 	return Settings{
+		Network: NetworkSettings{
+			MixedPort: 7890,
+		},
 		DNSManagement: "managed",
 		TUNManagement: "managed",
 		DNS: DNSSettings{
@@ -134,6 +141,11 @@ func LoadSettings(s *store.Store) (Settings, error) {
 	if e != nil {
 		return x, e
 	}
+	if x.Network.MixedPort <= 0 {
+		// Older settings files predate the managed network block. Keep the
+		// bootstrap contract when the block or its field was absent.
+		x.Network.MixedPort = DefaultSettings().Network.MixedPort
+	}
 	// Normalize casing/whitespace, but preserve an explicit mixed stack. The
 	// default is gvisor; migration must not rewrite a user's chosen strategy.
 	if normalized := NormalizeTUNStack(x.TUN.Stack); normalized != x.TUN.Stack {
@@ -145,6 +157,9 @@ func LoadSettings(s *store.Store) (Settings, error) {
 	return x, nil
 }
 func SaveSettings(s *store.Store, x Settings) error {
+	if x.Network.MixedPort <= 0 {
+		x.Network.MixedPort = DefaultSettings().Network.MixedPort
+	}
 	x.TUN.Stack = NormalizeTUNStack(x.TUN.Stack)
 	return s.WriteJSON(s.SettingsPath(), x)
 }

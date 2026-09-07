@@ -16,10 +16,58 @@ func TestManagedDNSAndTUNAndProtectedFields(t *testing.T) {
 		t.Fatal(e)
 	}
 	s := string(out)
-	for _, want := range []string{"dns:", "tun:", "stack: gvisor", "external-controller: 127.0.0.1:9090", "secret: keep"} {
+	for _, want := range []string{"mixed-port: 7890", "dns:", "tun:", "stack: gvisor", "external-controller: 127.0.0.1:9090", "secret: keep"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("compiled config lacks %q: %s", want, s)
 		}
+	}
+}
+
+func TestManagedMixedPortWinsOverSourceAndOverrides(t *testing.T) {
+	settings := profile.DefaultSettings()
+	settings.Network.MixedPort = 7890
+	out, err := (Compiler{Settings: settings}).Compile(CompileInput{
+		Source:          []byte("mixed-port: 9999\nport: 7891\n"),
+		GlobalOverride:  []byte("mixed-port: 8899\n"),
+		ProfileOverride: []byte("mixed-port: 7788\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compiled["mixed-port"]; got != 7890 {
+		t.Fatalf("compiled mixed-port = %#v, want 7890", got)
+	}
+	if got := compiled["port"]; got != 7891 {
+		t.Fatalf("source HTTP port changed: %#v", got)
+	}
+}
+
+func TestCompilerPreservesNetworkSettingWhenOtherSettingsUseDefaults(t *testing.T) {
+	settings := profile.Settings{Network: profile.NetworkSettings{MixedPort: 8890}}
+	out, err := (Compiler{Settings: settings}).Compile(CompileInput{Source: []byte("mode: rule\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compiled["mixed-port"]; got != 8890 {
+		t.Fatalf("compiled mixed-port = %#v, want 8890", got)
+	}
+}
+
+func TestValidateListenerConflicts(t *testing.T) {
+	if err := ValidateListenerConflicts(map[string]any{"mixed-port": 7890, "port": 7891}); err != nil {
+		t.Fatal(err)
+	}
+	err := ValidateListenerConflicts(map[string]any{"mixed-port": 7890, "port": 7890})
+	if err == nil || !strings.Contains(err.Error(), "Port 7890 is already used by mixed-port") {
+		t.Fatalf("expected friendly listener conflict, got %v", err)
 	}
 }
 func TestManagedDNSAndTUNPreserveUnknownFields(t *testing.T) {

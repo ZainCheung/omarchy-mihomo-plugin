@@ -26,6 +26,8 @@ jobs:
         run: ./tests/integration.sh
       - name: Bootstrap setup tests
         run: ./tests/bootstrap.sh
+      - name: System Proxy contract tests
+        run: ./tests/sysproxy.sh
       - name: Validate plugin manifest
         run: |
           if command -v omarchy >/dev/null 2>&1; then

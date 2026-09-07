@@ -13,35 +13,34 @@ The managed TUN default is `gvisor`, but TUN is **off until the user enables
 it**. `system`, `gvisor`, and `mixed` remain available; an explicit `mixed`
 choice is preserved so it can be evaluated against local firewall behavior.
 
+Managed profiles also provide a stable `mixed-port` (7890 by default) for
+System Proxy. The plugin does not install or update the Mihomo binary.
+
 ## Quick start
 
-The normal path does not require a hand-written `config.yaml`, an
+Mihomo must already be installed using your preferred system package or
+installation method; verify it with `mihomo -v`. The normal path does not
+require a hand-written `config.yaml`, an
 `external-controller` setting, or knowledge of the manager CLI.
 
-1. Install Mihomo if it is not already installed:
-
-   ```sh
-   omarchy pkg add mihomo
-   ```
-
-2. Install and enable the plugin:
+1. Install and enable the plugin:
 
    ```sh
    omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
    omarchy bar move io.github.ZainCheung.mihomo --section right
    ```
 
-3. Open the Mihomo widget and click **Set up Mihomo** if prompted. On first
+2. Open the Mihomo widget and click **Set up Mihomo** if prompted. On first
    use, the plugin adopts a reachable core or creates its own small bootstrap
-   core and user service.
+   configuration and user service around the installed binary.
 
-4. Click **Add subscription**, paste the subscription URL, and choose a node.
+3. Click **Add subscription**, paste the subscription URL, and choose a node.
    The first profile is selected automatically. **System Proxy** is the
    recommended starting point; TUN stays off until you explicitly turn it on.
 
 If TUN needs an extra Linux capability or conflicts with a firewall, the panel
-will keep the profile usable and point you to Diagnostics instead of making
-profile setup fail.
+will keep the profile usable. When you explicitly enable TUN, Diagnostics can
+show **Fix & Enable** for the missing capability.
 
 ## What first-time setup does
 
@@ -58,7 +57,7 @@ controller so the client can connect, but it does not enable TUN or depend on
 Geo databases. The plugin never overwrites a user's existing Mihomo config or
 silently downloads a core binary.
 
-## Install
+## Plugin install
 
 ```sh
 omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
@@ -90,6 +89,7 @@ bin/mihomo-manager policy binding set <profile-id> proxy "Proxy group"
 bin/mihomo-manager reconcile
 bin/mihomo-manager doctor
 bin/mihomo-manager doctor tun --stack gvisor
+bin/mihomo-manager doctor fix-tun-permission
 ```
 
 All manager mutations use `~/.config/omarchy-mihomo` (or
@@ -107,7 +107,9 @@ the subscription's rule array. Proxy rules use a binding stored in
 `binding_required` when its saved proxy group is no longer available.
 
 DNS and TUN default to Managed; managed TUN uses the `gvisor` stack by default
-and remains disabled until the user enables it. Managed DNS/TUN overlay only
+and remains disabled until the user enables it. Managed network settings also
+inject the configured `mixed-port`; System Proxy uses that port exclusively.
+Managed DNS/TUN overlay only
 the fields exposed by the manager and preserve other source/override fields;
 set either management mode to `inherit` to leave that section untouched.
 Managed profiles preserve the running core's `external-controller`, Unix
@@ -128,7 +130,8 @@ failures, see the troubleshooting and implementation notes in
 
 **Raw Config Mode** is the legacy-compatible mode. Until a profile is added or
 the current config is imported, the plugin reads the running core and keeps the
-existing runtime TUN and system-proxy controls.
+existing runtime TUN controls. System Proxy is available only when the running
+configuration exposes a real `mixed-port` listener.
 
 **Managed Profile Mode** treats a subscription as **source configuration, not as
 the final Mihomo runtime configuration**. The manager stores source YAML and
@@ -137,7 +140,7 @@ small overrides separately, compiles them into a runtime YAML, validates it with
 
 ```text
 Source Config → Global Override → Profile Override → Custom Rules
-              → Managed DNS/TUN → Protected controller fields
+              → Managed Network → Managed DNS/TUN → Protected controller fields
               → validation → runtime/current.yaml
 ```
 
@@ -148,6 +151,7 @@ Source Config → Global Override → Profile Override → Custom Rules
 cd manager && go test ./...
 ./tests/integration.sh
 ./tests/bootstrap.sh
+./tests/sysproxy.sh
 ```
 
 The repository is MIT licensed. It does not copy Clash Verge Rev source code;

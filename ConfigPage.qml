@@ -14,6 +14,7 @@ Item {
   property bool customizeNetwork: false
   property bool showAdvancedNetwork: false
   property bool showCoreOverview: false
+  property string mixedPortDraft: ""
 
   function fmtUpdated(stamp) {
     var text = String(stamp || "")
@@ -317,6 +318,45 @@ Item {
           onClicked: {
             root.customizeNetwork = !root.customizeNetwork
             if (!root.customizeNetwork) root.showAdvancedNetwork = false
+          }
+        }
+        Row {
+          width: parent.width
+          spacing: Style.space(12)
+          visible: root.customizeNetwork
+          height: visible ? implicitHeight : 0
+
+          Text {
+            width: (parent.width - Style.space(12)) / 2
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.svc ? root.svc.t("mixedPort") : "Mixed port"
+            textFormat: Text.PlainText
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            renderType: Text.NativeRendering
+          }
+
+          TextField {
+            id: mixedPortField
+            width: (parent.width - Style.space(12)) / 2
+            placeholderText: "7890"
+            foreground: root.fg
+            accent: Color.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            enabled: root.svc && !root.svc.managerSettingsMutating
+            onTextChanged: if (activeFocus) root.mixedPortDraft = text
+            onEditingFinished: {
+              root.svc.setManagerSetting("mixed-port", text)
+              root.mixedPortDraft = ""
+            }
+            Binding {
+              target: mixedPortField
+              property: "text"
+              value: String(root.managerValue("network", "mixedPort", 7890))
+              when: !mixedPortField.activeFocus && root.mixedPortDraft === ""
+            }
           }
         }
         Row {

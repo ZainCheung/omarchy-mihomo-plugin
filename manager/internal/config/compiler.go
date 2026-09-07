@@ -52,9 +52,21 @@ func (c Compiler) Compile(input CompileInput) ([]byte, error) {
 	settings := input.Settings
 	if settings.DNSManagement == "" && settings.TUNManagement == "" {
 		settings = c.Settings
+		if input.Settings.Network.MixedPort > 0 {
+			settings.Network = input.Settings.Network
+		}
 	}
 	if settings.DNSManagement == "" && settings.TUNManagement == "" {
-		settings = profile.DefaultSettings()
+		defaults := profile.DefaultSettings()
+		if settings.Network.MixedPort > 0 {
+			defaults.Network = settings.Network
+		}
+		settings = defaults
+	}
+	if settings.Network.MixedPort <= 0 {
+		// Keep direct compiler callers and pre-network settings files on the
+		// same runtime contract as the manager's persisted defaults.
+		settings.Network.MixedPort = profile.DefaultSettings().Network.MixedPort
 	}
 	updated = (Compiler{Settings: settings}).managed(updated)
 	protected := input.Protected
@@ -66,6 +78,12 @@ func (c Compiler) Compile(input CompileInput) ([]byte, error) {
 }
 func (c Compiler) managed(m map[string]any) map[string]any {
 	out := clone(m).(map[string]any)
+	if c.Settings.Network.MixedPort > 0 {
+		// mixed-port is a manager-owned network setting. Apply it after all
+		// source and override layers so a subscription cannot silently move
+		// the System Proxy endpoint.
+		out["mixed-port"] = c.Settings.Network.MixedPort
+	}
 	if c.Settings.DNSManagement == "managed" {
 		d := map[string]any{"enable": c.Settings.DNS.Enable, "ipv6": c.Settings.DNS.IPv6, "enhanced-mode": c.Settings.DNS.EnhancedMode, "fake-ip-range": c.Settings.DNS.FakeIPRange, "default-nameserver": toAny(c.Settings.DNS.DefaultNameserver), "nameserver": toAny(c.Settings.DNS.Nameserver), "proxy-server-nameserver": toAny(c.Settings.DNS.ProxyServerNameserver), "fake-ip-filter": toAny(c.Settings.DNS.FakeIPFilter)}
 		// Managed settings own only the fields exposed by the manager. Keep

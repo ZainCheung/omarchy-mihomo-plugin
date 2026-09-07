@@ -8,32 +8,29 @@ DNS/TUN、源配置/运行时配置/覆盖查看、原子应用与回滚，以�
 
 托管 TUN 默认使用 `gvisor`，但 **TUN 默认关闭，只有用户主动开启才会接管流量**。仍可选择
 `system`、`gvisor` 或 `mixed`；用户明确选择的 `mixed` 会被保留，方便和本机防火墙行为对比。
+托管配置还会提供稳定的 `mixed-port`（默认 7890）供系统代理使用。插件不负责安装或升级
+Mihomo 二进制。
 
 ## 两分钟快速开始
 
-正常流程不要求手写 `config.yaml`、配置 `external-controller`，也不要求理解管理器命令。
+请先使用你选择的系统安装方式安装 Mihomo，并可用 `mihomo -v` 验证。正常流程不要求手写
+`config.yaml`、配置 `external-controller`，也不要求理解管理器命令。
 
-1. 如果系统还没有 Mihomo，先安装：
-
-   ```sh
-   omarchy pkg add mihomo
-   ```
-
-2. 安装并启用插件：
+1. 安装并启用插件：
 
    ```sh
    omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
    omarchy bar move io.github.ZainCheung.mihomo --section right
    ```
 
-3. 打开 Mihomo 小组件。如果看到提示，点击 **设置 Mihomo**。首次设置会优先采用已经能
-   连接的 Mihomo；否则创建插件自己的轻量内核和用户服务。
+2. 打开 Mihomo 小组件。如果看到提示，点击 **设置 Mihomo**。首次设置会优先采用已经能
+   连接的 Mihomo；否则围绕已安装的二进制创建插件自己的轻量启动配置和用户服务。
 
-4. 点击 **添加订阅**，粘贴订阅链接并选择节点。第一个配置档案会自动启用。建议先使用
+3. 点击 **添加订阅**，粘贴订阅链接并选择节点。第一个配置档案会自动启用。建议先使用
    **系统代理**；TUN 会保持关闭，直到你主动开启。
 
-如果 TUN 缺少 Linux 权限或和防火墙冲突，面板会保留配置档案并引导你打开网络诊断，而不会
-让添加配置档案这一步失败。
+如果 TUN 缺少 Linux 权限或和防火墙冲突，面板会保留配置档案。用户主动开启 TUN 时，可在
+网络诊断中点击 **修复并启用** 处理缺少的 capability。
 
 ## 首次设置做了什么
 
@@ -78,6 +75,7 @@ bin/mihomo-manager policy binding set <profile-id> proxy "代理组"
 bin/mihomo-manager reconcile
 bin/mihomo-manager doctor
 bin/mihomo-manager doctor tun --stack gvisor
+bin/mihomo-manager doctor fix-tun-permission
 ```
 
 远程订阅会先下载、解析、编译并通过 `mihomo -t -f` 校验，成功后才替换源配置。全局
@@ -86,7 +84,8 @@ Proxy 规则的代理组选择按配置档案保存在 `profiles/<id>/bindings.j
 分别编译为 `DIRECT`/`REJECT`。订阅更新后若原代理组消失，更新会安全失败并保留旧配置，
 等待用户重新选择代理组。
 
-托管 DNS/TUN 只覆盖管理器明确拥有的字段，订阅中的其他字段会保留；托管配置的运行时
+托管网络设置会在编译最后注入 `mixed-port`，系统代理只使用这个端口。托管 DNS/TUN
+只覆盖管理器明确拥有的字段，订阅中的其他字段会保留；托管配置的运行时
 文件保存在 `~/.config/omarchy-mihomo/runtime/`，包含控制器 Secret 的状态文件权限为 0600。
 
 更完整的实现约束、故障排查和验收用例见

@@ -3,12 +3,16 @@ package doctor
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/config"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/core"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/profile"
 	"github.com/ZainCheung/omarchy-mihomo-plugin/manager/internal/store"
@@ -25,6 +29,12 @@ type Check struct {
 
 type Report struct {
 	Checks []Check `json:"checks"`
+}
+
+type RepairResult struct {
+	Executable string `json:"executable"`
+	Restarted  bool   `json:"restarted"`
+	Preflight  Report `json:"preflight"`
 }
 
 // RunTUNPreflight checks the host-side prerequisites that can be evaluated
@@ -44,6 +54,161 @@ func RunTUNPreflight(stack string) Report {
 	addCapabilityCheck(&r, executable)
 	addFirewallTUNPreflightCheck(&r, stack)
 	return r
+}
+
+// FixTUNPermission grants only the two capabilities Mihomo needs for TUN,
+// using the actual executable of the running process. It deliberately does
+// not run a shell as root and never runs during setup; callers invoke it only
+// after the user explicitly asks to enable TUN.
+func FixTUNPermission() (RepairResult, error) {
+	info, err := core.CoreInfo()
+	if err != nil {
+		return RepairResult{}, fmt.Errorf("cannot inspect the running Mihomo process: %w", err)
+	}
+	executable, err := runningExecutable(info)
+	if err != nil {
+		return RepairResult{}, err
+	}
+	pkexec, err := privilegedTool("pkexec")
+	if err != nil {
+		return RepairResult{}, err
+	}
+	setcap, err := privilegedTool("setcap")
+	if err != nil {
+		return RepairResult{}, err
+	}
+	cmd := exec.Command(pkexec, setcap, "cap_net_admin,cap_net_raw=+ep", executable)
+	if output, runErr := cmd.CombinedOutput(); runErr != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = runErr.Error()
+		}
+		return RepairResult{}, fmt.Errorf("could not grant TUN capabilities: %s", message)
+	}
+	if err := verifyCapabilities(executable); err != nil {
+		return RepairResult{}, err
+	}
+
+	restarted, err := restartManagedService()
+	if err != nil {
+		return RepairResult{Executable: executable}, err
+	}
+	if !restarted {
+		return RepairResult{Executable: executable}, fmt.Errorf(
+			"capabilities were granted to %s; restart Mihomo before enabling TUN", executable)
+	}
+	if err := waitForController(); err != nil {
+		return RepairResult{Executable: executable, Restarted: true}, err
+	}
+	report := RunTUNPreflight("")
+	if !capabilityCheckOK(report) {
+		return RepairResult{Executable: executable, Restarted: true, Preflight: report},
+			fmt.Errorf("TUN capability verification failed after restarting Mihomo")
+	}
+	return RepairResult{Executable: executable, Restarted: true, Preflight: report}, nil
+}
+
+func runningExecutable(info core.Info) (string, error) {
+	if info.PID <= 0 {
+		return "", fmt.Errorf("Mihomo process ID is unavailable; cannot safely repair TUN permissions")
+	}
+	path, err := filepath.EvalSymlinks(fmt.Sprintf("/proc/%d/exe", info.PID))
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Mihomo executable for PID %d: %w", info.PID, err)
+	}
+	stat, err := os.Stat(path)
+	if err != nil || !stat.Mode().IsRegular() || stat.Mode()&0111 == 0 {
+		return "", fmt.Errorf("Mihomo executable is not a regular executable: %s", path)
+	}
+	return path, nil
+}
+
+func privilegedTool(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("%s is unavailable", name)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve %s: %w", name, err)
+	}
+	stat, err := os.Stat(resolved)
+	if err != nil || !stat.Mode().IsRegular() || stat.Mode()&0111 == 0 {
+		return "", fmt.Errorf("%s is not an executable file", name)
+	}
+	return resolved, nil
+}
+
+func verifyCapabilities(executable string) error {
+	getcap, err := privilegedTool("getcap")
+	if err != nil {
+		return err
+	}
+	output, err := exec.Command(getcap, executable).CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "cap_net_admin") || !strings.Contains(string(output), "cap_net_raw") {
+		return fmt.Errorf("Mihomo capabilities could not be verified for %s", executable)
+	}
+	return nil
+}
+
+func restartManagedService() (bool, error) {
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		configHome = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	serviceDir := os.Getenv("OMARCHY_MIHOMO_SYSTEMD_USER_DIR")
+	if serviceDir == "" {
+		serviceDir = filepath.Join(configHome, "systemd", "user")
+	}
+	servicePath := filepath.Join(serviceDir, "omarchy-mihomo.service")
+	service, err := os.ReadFile(servicePath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !strings.Contains(string(service), "X-Omarchy-Mihomo-Managed: true") {
+		return false, nil
+	}
+	systemctl, err := privilegedTool("systemctl")
+	if err != nil {
+		return false, err
+	}
+	output, err := exec.Command(systemctl, "--user", "try-restart", "omarchy-mihomo.service").CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return false, fmt.Errorf("could not restart the managed Mihomo service: %s", message)
+	}
+	return true, nil
+}
+
+func waitForController() error {
+	attempts := 24
+	if raw := os.Getenv("OMARCHY_MIHOMO_TUN_RESTART_ATTEMPTS"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			attempts = value
+		}
+	}
+	for i := 0; i < attempts; i++ {
+		if _, err := core.Run("get", "/version"); err == nil {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("Mihomo controller did not recover after restarting the managed service")
+}
+
+func capabilityCheckOK(report Report) bool {
+	for _, check := range report.Checks {
+		if check.ID == "tunCapability" {
+			return check.Status == "ok"
+		}
+	}
+	return false
 }
 
 // appendCheck keeps the human-readable CLI message while also carrying a
@@ -85,7 +250,7 @@ func Run(s *store.Store) Report {
 		add("controller", "error", "mihomo controller is unavailable", "diagnosticControllerUnavailable")
 		add("currentConfig", "warning", "running config path is unavailable", "diagnosticConfigPathUnavailable")
 		add("configApi", "error", "running config could not be queried", "diagnosticConfigUnavailable")
-		addNetworkChecks(&r, map[string]any{})
+		addNetworkChecksWithRuntime(&r, map[string]any{}, runtimeConfig(s))
 		addRuntimeChecks(&r, s, false)
 		addCapabilityCheck(&r, "")
 		addResolverChecks(&r)
@@ -141,10 +306,11 @@ func Run(s *store.Store) Report {
 	configs, configErr := coreObject("/configs")
 	if configErr != nil {
 		add("configApi", "error", "running config could not be queried", "diagnosticConfigUnavailable")
-		addNetworkChecks(&r, map[string]any{})
+		addNetworkChecksWithRuntime(&r, map[string]any{}, runtimeConfig(s))
 	} else {
 		add("configApi", "ok", "running config is readable", "diagnosticConfigReadable")
-		addNetworkChecks(&r, configs)
+		addNetworkChecksWithRuntime(&r, configs, runtimeConfig(s))
+		addSystemProxyCheck(&r, configs)
 	}
 
 	addRuntimeChecks(&r, s, configErr == nil)
@@ -226,41 +392,68 @@ func objectAt(data map[string]any, key string) map[string]any {
 }
 
 func addNetworkChecks(r *Report, configs map[string]any) {
+	addNetworkChecksWithRuntime(r, configs, nil)
+}
+
+func runtimeConfig(s *store.Store) map[string]any {
+	if s == nil {
+		return nil
+	}
+	b, err := os.ReadFile(s.CurrentPath())
+	if err != nil {
+		return nil
+	}
+	parsed, err := config.Parse(b)
+	if err != nil {
+		return nil
+	}
+	return parsed
+}
+
+func addNetworkChecksWithRuntime(r *Report, configs, runtime map[string]any) {
 	tun := objectAt(configs, "tun")
-	if enabled, ok := boolAt(tun, "enable"); ok {
+	enabled, reported := boolAt(tun, "enable")
+	if reported {
 		if enabled {
 			appendCheck(r, "tunEnabled", "ok", "enabled", "enabled")
 		} else {
-			appendCheck(r, "tunEnabled", "warning", "disabled", "disabled")
+			appendCheck(r, "tunEnabled", "info", "disabled", "disabled")
 		}
 	} else {
 		appendCheck(r, "tunEnabled", "warning", "TUN setting was not reported", "diagnosticSettingUnreported", "TUN")
 	}
-	if stack := firstString(tun, "stack"); stack != "" {
-		appendCheck(r, "tunStack", "ok", stack)
-	} else {
-		appendCheck(r, "tunStack", "warning", "TUN stack was not reported", "diagnosticFieldUnreported", "TUN stack")
-	}
-	if device := firstString(tun, "device"); device != "" {
-		if _, err := exec.LookPath("ip"); err != nil {
-			appendCheck(r, "tunInterface", "warning", "ip command is unavailable", "diagnosticIPUnavailable")
-		} else if err := exec.Command("ip", "link", "show", device).Run(); err != nil {
-			appendCheck(r, "tunInterface", "warning", device+" is not present", "diagnosticInterfaceMissing", device)
+	if !reported || enabled {
+		if stack := firstString(tun, "stack"); stack != "" {
+			appendCheck(r, "tunStack", "ok", stack)
 		} else {
-			appendCheck(r, "tunInterface", "ok", device)
+			appendCheck(r, "tunStack", "warning", "TUN stack was not reported", "diagnosticFieldUnreported", "TUN stack")
 		}
-	} else {
-		appendCheck(r, "tunInterface", "warning", "TUN interface was not reported", "diagnosticFieldUnreported", "TUN interface")
+		if device := firstString(tun, "device"); device != "" {
+			if _, err := exec.LookPath("ip"); err != nil {
+				appendCheck(r, "tunInterface", "warning", "ip command is unavailable", "diagnosticIPUnavailable")
+			} else if err := exec.Command("ip", "link", "show", device).Run(); err != nil {
+				appendCheck(r, "tunInterface", "warning", device+" is not present", "diagnosticInterfaceMissing", device)
+			} else {
+				appendCheck(r, "tunInterface", "ok", device)
+			}
+		} else {
+			appendCheck(r, "tunInterface", "warning", "TUN interface was not reported", "diagnosticFieldUnreported", "TUN interface")
+		}
 	}
 
 	dns := objectAt(configs, "dns")
-	if enabled, ok := boolAt(dns, "enable"); ok {
+	runtimeDNS := objectAt(runtime, "dns")
+	dnsEnabled, dnsReported := boolAt(dns, "enable")
+	if !dnsReported {
+		dnsEnabled, dnsReported = boolAt(runtimeDNS, "enable")
+	}
+	if dnsReported {
 		status := "warning"
 		message := "disabled"
-		if enabled {
+		if dnsEnabled {
 			status, message = "ok", "enabled"
 		}
-		if enabled {
+		if dnsEnabled {
 			appendCheck(r, "dnsEnabled", status, message, "enabled")
 		} else {
 			appendCheck(r, "dnsEnabled", status, message, "disabled")
@@ -268,7 +461,11 @@ func addNetworkChecks(r *Report, configs map[string]any) {
 	} else {
 		appendCheck(r, "dnsEnabled", "warning", "DNS setting was not reported", "diagnosticSettingUnreported", "DNS")
 	}
-	if mode := firstString(dns, "enhanced-mode"); mode != "" {
+	mode := firstString(dns, "enhanced-mode")
+	if mode == "" {
+		mode = firstString(runtimeDNS, "enhanced-mode")
+	}
+	if mode != "" {
 		appendCheck(r, "dnsMode", "ok", mode)
 	} else {
 		appendCheck(r, "dnsMode", "warning", "DNS mode was not reported", "diagnosticFieldUnreported", "DNS mode")
@@ -280,6 +477,51 @@ func addNetworkChecks(r *Report, configs map[string]any) {
 	} else {
 		appendCheck(r, "httpProxyPort", "warning", "no proxy port is enabled", "diagnosticNoProxyPort")
 	}
+}
+
+func addSystemProxyCheck(r *Report, configs map[string]any) {
+	output, err := core.Run("sysproxy", "status")
+	if err != nil {
+		return
+	}
+	var status struct {
+		Enabled bool   `json:"enabled"`
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+	}
+	if err := json.Unmarshal(output, &status); err != nil || !status.Enabled {
+		return
+	}
+	mixed := core.MixedPortFromConfig(configs)
+	if mixed <= 0 {
+		appendCheck(r, "systemProxy", "error", "system proxy is enabled but mixed-port is unavailable", "diagnosticSystemProxyNoMixedPort")
+		return
+	}
+	if status.Port != mixed {
+		appendCheck(r, "systemProxy", "error",
+			fmt.Sprintf("system proxy points to port %d, but mixed-port is %d", status.Port, mixed),
+			"diagnosticSystemProxyPortMismatch", strconv.Itoa(status.Port), strconv.Itoa(mixed))
+		return
+	}
+	if !localListenerAvailable(mixed) {
+		appendCheck(r, "systemProxy", "error",
+			fmt.Sprintf("system proxy points to 127.0.0.1:%d, but Mihomo is not listening there", mixed),
+			"diagnosticSystemProxyListenerMissing", strconv.Itoa(mixed))
+		return
+	}
+	appendCheck(r, "systemProxy", "ok", fmt.Sprintf("127.0.0.1:%d", mixed), "diagnosticSystemProxyHealthy", strconv.Itoa(mixed))
+}
+
+func localListenerAvailable(port int) bool {
+	if port < 1 || port > 65535 {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func addRuntimeChecks(r *Report, s *store.Store, controllerReadable bool) {
@@ -309,13 +551,13 @@ func addCapabilityCheck(r *Report, executable string) {
 		return
 	}
 	out, err := exec.Command("getcap", executable).CombinedOutput()
-	if err == nil && strings.Contains(string(out), "cap_net_admin") {
+	if err == nil && strings.Contains(string(out), "cap_net_admin") && strings.Contains(string(out), "cap_net_raw") {
 		appendCheck(r, "tunCapability", "ok", strings.TrimSpace(string(out)))
 		return
 	}
 	appendCheck(r, "tunCapability", "warning",
-		fmt.Sprintf("mihomo is missing cap_net_admin; run: sudo setcap cap_net_admin,cap_net_raw=+ep %s", executable),
-		"diagnosticCapabilityMissing", "sudo setcap cap_net_admin,cap_net_raw=+ep "+executable)
+		"mihomo is missing cap_net_admin or cap_net_raw; run doctor fix-tun-permission",
+		"diagnosticCapabilityMissing")
 }
 
 func addResolverChecks(r *Report) {

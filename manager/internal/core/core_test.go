@@ -16,3 +16,12 @@ func TestHTTPProxyPortExcludesSocksOnly(t *testing.T) {
 		t.Fatalf("HTTPProxyPort(mixed-port) = %d, want 7892", got)
 	}
 }
+
+func TestMixedPortFromConfigDoesNotFallbackToHTTP(t *testing.T) {
+	if got := MixedPortFromConfig(map[string]any{"port": float64(7890)}); got != 0 {
+		t.Fatalf("MixedPortFromConfig(HTTP only) = %d, want 0", got)
+	}
+	if got := MixedPortFromConfig(map[string]any{"mixed-port": json.Number("7892"), "port": float64(7890)}); got != 7892 {
+		t.Fatalf("MixedPortFromConfig = %d, want 7892", got)
+	}
+}

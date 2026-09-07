@@ -52,10 +52,10 @@ Item {
   property string setupServicePath: ""
   property bool setupLoading: false
   property bool setupManagerPending: false
-  property bool coreInstalling: false
   property bool tunPreflightLoading: false
   property bool tunPreflightTarget: false
   property bool tunPreflightIssue: false
+  property bool tunFixLoading: false
   property bool tunOwnershipPromptVisible: false
   property bool tunAdoptionTarget: false
   property var managerSettings: ({})
@@ -103,6 +103,7 @@ Item {
   property bool hadConnection: false
   property bool managerReconcilePending: false
   property bool managerInitialReconcileDone: false
+  property bool coreRefreshPending: false
   property string lastError: ""
   property string version: ""
   property string endpointTarget: ""
@@ -200,8 +201,9 @@ Item {
     language: root.language
   }
 
-  readonly property int proxyListenPort: mixedPort > 0 ? mixedPort
-    : (httpPort > 0 ? httpPort : socksPort)
+  // System Proxy writes HTTP, HTTPS, and SOCKS to one endpoint. A regular
+  // HTTP or SOCKS listener is not a valid fallback for that contract.
+  readonly property int systemProxyPort: mixedPort > 0 ? mixedPort : 0
 
   readonly property string captureMode: tunEnabled ? "tun"
     : (sysproxyEnabled ? "sysproxy" : "off")
@@ -453,12 +455,6 @@ Item {
     }
   }
 
-  function installCore() {
-    if (!ready || coreInstalling || coreInstallProc.running) return
-    coreInstalling = true
-    coreInstallProc.running = true
-  }
-
   function setManagerSetting(key, value) {
     if (!ready || !managerInstalled || !key || value === undefined || value === null) return
     var pending = {}
@@ -694,7 +690,12 @@ Item {
   // --- reads ---------------------------------------------------------------
 
   function refresh(forceProxies) {
-    if (!ready || coreProc.running) return
+    if (!ready) return
+    if (coreProc.running) {
+      if (forceProxies === true) coreRefreshPending = true
+      return
+    }
+    coreRefreshPending = false
     var needProxies = forceProxies === true
       || (active && (page === "home" || page === "proxies"))
     coreProc.command = ["/usr/bin/bash", runner, needProxies ? "core" : "status"]
@@ -781,7 +782,7 @@ Item {
     var configs = data.configs
     if (configs) {
       setIfChanged("mode", String(configs.mode || "rule"))
-      setIfChanged("mixedPort", Number(configs["mixed-port"] || configs.port || 0))
+      setIfChanged("mixedPort", Number(configs["mixed-port"] || 0))
       setIfChanged("allowLan", configs["allow-lan"] === true)
       setIfChanged("ipv6", configs.ipv6 === true)
       setIfChanged("logLevel", String(configs["log-level"] || ""))
@@ -861,13 +862,20 @@ Item {
   // Clash Verge rewrites the OS proxy when mixed-port changes while system
   // proxy is on. Skip the first poll so we do not surprise an existing session.
   function maybeRefreshSysproxyPort() {
-    var port = proxyListenPort
+    var port = systemProxyPort
     if (!mixedPortSeen) {
       if (port > 0) mixedPortSeen = true
       return
     }
     if (sysproxyWritePending || !sysproxyWanted || !sysproxyEnabled) return
-    if (port <= 0 || port === sysproxyPort) return
+    if (port <= 0) {
+      // A runtime that loses mixed-port must not leave the desktop pointed at
+      // a dead endpoint. The ctl-side preflight also protects the transition
+      // itself from races.
+      enqueue(["sysproxy", "off"], "", "sysproxy")
+      return
+    }
+    if (port === sysproxyPort) return
     enqueue(["sysproxy", "on", "127.0.0.1", String(port)], "", "sysproxy")
   }
 
@@ -1060,7 +1068,7 @@ Item {
   function setSysproxy(enabled) {
     if (!ready) return
     if (enabled) {
-      var port = proxyListenPort
+      var port = systemProxyPort
       if (port <= 0) {
         notice = t("sysproxyNoPort")
         return
@@ -1115,27 +1123,23 @@ Item {
       checks = Array.isArray(data.checks) ? data.checks : []
     } catch (e) {
       tunPreflightLoading = false
-      tunPreflightTarget = false
       tunPreflightIssue = true
       notice = t("tunPreflightBlocked")
       return
     }
     if (checks.length === 0) {
       tunPreflightLoading = false
-      tunPreflightTarget = false
       tunPreflightIssue = true
       notice = t("tunPreflightBlocked")
       return
     }
     for (var i = 0; i < checks.length; i++) {
       var check = checks[i]
-      if ((check.id === "tunCapability" || check.id === "firewallTunCompatibility")
-          && check.status !== "ok") {
+      if (check.id === "tunCapability" && check.status !== "ok") {
         tunPreflightLoading = false
-        tunPreflightTarget = false
         tunPreflightIssue = true
         diagnostics = checks
-        notice = t("tunPreflightBlocked")
+        notice = t("tunPermissionRequired")
         return
       }
     }
@@ -1158,6 +1162,14 @@ Item {
       tunPreflightProc.running = false
     }
     applyTunEnabled(false)
+  }
+
+  function fixTunPermission() {
+    if (!ready || !managerInstalled || tunFixLoading || tunFixProc.running) return
+    tunPreflightTarget = true
+    tunFixLoading = true
+    notice = t("fixingTunPermission")
+    tunFixProc.running = true
   }
 
   function applyTunEnabled(enabled) {
@@ -1430,6 +1442,10 @@ Item {
 
   onActiveChanged: {
     if (active) {
+      // Re-detect a Mihomo binary that the user installed while the panel was
+      // closed. Setup status is intentionally independent of the controller
+      // heartbeat.
+      refreshSetupStatus()
       refresh()
       refreshPage()
     }
@@ -1512,21 +1528,6 @@ Item {
       }
       if (root.managerInstalled) root.finishSetup()
       else root.installManager(true)
-    }
-  }
-
-  Process {
-    id: coreInstallProc
-    command: ["omarchy-launch-floating-terminal-with-presentation", "omarchy pkg add mihomo"]
-    stdout: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) {
-      root.coreInstalling = false
-      if (exitCode !== 0) {
-        root.setupState = "attention"
-        root.setupMessage = root.t("coreInstallFailed")
-        return
-      }
-      root.refreshSetupStatus()
     }
   }
 
@@ -1638,9 +1639,43 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.tunPreflightLoading) {
         root.tunPreflightLoading = false
-        root.tunPreflightTarget = false
         root.tunPreflightIssue = true
         root.notice = root.t("tunPreflightBlocked")
+      }
+    }
+  }
+
+  Process {
+    id: tunFixProc
+    command: ["/usr/bin/bash", root.managerRunner, "doctor", "fix-tun-permission"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.tunFixLoading = false
+        try {
+          var data = JSON.parse(text)
+          if (data.ok === true) {
+            root.notice = root.t("tunOnNotice")
+            root.tunPreflightIssue = false
+            // The repair command restarts plugin-managed Mihomo. Re-run the
+            // normal preflight so the original enable intent continues only
+            // after the new process has been verified.
+            if (root.tunPreflightTarget) root.requestTunPreflight(true)
+          } else {
+            root.tunPreflightIssue = true
+            root.notice = root.actionErrorMessage(text) || root.t("tunPermissionFixFailed")
+          }
+        } catch (e) {
+          root.tunPreflightIssue = true
+          root.notice = root.t("tunPermissionFixFailed")
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.tunFixLoading) {
+        root.tunFixLoading = false
+        root.tunPreflightIssue = true
+        root.notice = root.t("tunPermissionFixFailed")
       }
     }
   }
@@ -1899,6 +1934,8 @@ Item {
       }
       if (finishedAction.length > 0 && finishedAction[0] === "settings")
         root.managerSettingsMutating = root.managerActionPending("settings")
+      if (finishedAction.length > 0 && finishedAction[0] === "settings")
+        root.refresh(true)
       root.refreshProfiles()
       root.refreshManagerSettings()
       if (finishedAction.length > 0 && (finishedAction[0] === "rule" || finishedAction[0] === "policy"))
@@ -1961,6 +1998,10 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.lastError === "") {
         markDisconnected(root.t("connectFailed"))
+      }
+      if (root.coreRefreshPending) {
+        root.coreRefreshPending = false
+        root.refresh(true)
       }
     }
   }
