@@ -1,158 +1,186 @@
 # Mihomo
 
-An Omarchy Mihomo client for the bar and shell. Paste a subscription, choose a
-node, and use the system proxy; the advanced Mihomo control plane stays
-available when you need it.
+![Mihomo control panel](preview.png)
 
-The client supports remote subscriptions, local YAML imports, profile
-switching and updates, global custom rules, managed DNS/TUN settings,
-source/runtime/override inspection, atomic apply with rollback, and recovery
-after a core restart.
+Omarchy bar plugin: a control panel for the mihomo core. Left nav rail plus a
+right-hand page, covering **Home / Profiles / Proxies / Config / Connections /
+Rules**, with setup and network diagnostics available when needed.
 
-The managed TUN default is `gvisor`, but TUN is **off until the user enables
-it**. `system`, `gvisor`, and `mixed` remain available; an explicit `mixed`
-choice is preserved so it can be evaluated against local firewall behavior.
+Talks to mihomo's external controller (REST API) directly. It does **not**
+depend on Clash Verge or any other GUI client. The core alone is enough.
 
-Managed profiles also provide a stable `mixed-port` (7890 by default) for
-System Proxy. The plugin does not install or update the Mihomo binary.
+The UI defaults to **English**. Switch to Chinese with the EN / 中文 buttons
+in the sidebar or on the Config page.
 
-## Quick start
+License: MIT. See [LICENSE](LICENSE).
 
-Mihomo must already be installed using your preferred system package or
-installation method; verify it with `mihomo -v`. The normal path does not
-require a hand-written `config.yaml`, an
-`external-controller` setting, or knowledge of the manager CLI.
-
-1. Install and enable the plugin:
-
-   ```sh
-   omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
-   omarchy bar move io.github.ZainCheung.mihomo --section right
-   ```
-
-2. Open the Mihomo widget and click **Set up Mihomo** if prompted. On first
-   use, the plugin adopts a reachable core or creates its own small bootstrap
-   configuration and user service around the installed binary.
-
-3. Click **Add subscription**, paste the subscription URL, and choose a node.
-   The first profile is selected automatically. **System Proxy** is the
-   recommended starting point; TUN stays off until you explicitly turn it on.
-
-If TUN needs an extra Linux capability or conflicts with a firewall, the panel
-will keep the profile usable. When you explicitly enable TUN, Diagnostics can
-show **Fix & Enable** for the missing capability.
-
-## What first-time setup does
-
-The one-time setup action:
-
-- reuses an already reachable Mihomo core when possible;
-- tries an existing Mihomo user service before creating anything;
-- otherwise creates a plugin-owned bootstrap under
-  `~/.config/omarchy-mihomo/core/` and starts `omarchy-mihomo.service`;
-- installs the profile helper only as part of that explicit setup action.
-
-The bootstrap configuration is intentionally minimal. It enables a local
-controller so the client can connect, but it does not enable TUN or depend on
-Geo databases. The plugin never overwrites a user's existing Mihomo config or
-silently downloads a core binary.
-
-## Plugin install
+## Install
 
 ```sh
 omarchy plugin add https://github.com/ZainCheung/omarchy-mihomo-plugin.git --enable
 omarchy bar move io.github.ZainCheung.mihomo --section right
 ```
 
-The plugin installation itself is lightweight. The profile helper is installed
-only as part of the explicit first-time setup action (the bundled
-`bin/install-manager`), or can be provided during development with
-`OMARCHY_MIHOMO_MANAGER_BIN=/path/to/binary`.
+That clones the repo, validates `manifest.json`, and enables the plugin. Plugin
+installation does not run an installer and does not ask for elevated privileges.
+The plugin does not install Mihomo. Profile management is optional; first-time
+setup can reuse a reachable core or start a plugin-owned service around an
+already installed Mihomo binary.
 
-## Manager CLI
+## Remove
 
 ```sh
-bin/mihomo-manager status
-bin/mihomo-manager profile add --url https://example.test/config.yaml --name MySubscription
-bin/mihomo-manager profile import-current --name "Existing config"
-bin/mihomo-manager profile import --file /path/to/config.yaml --name "Local file"
-bin/mihomo-manager profile list
-bin/mihomo-manager profile select <id>
-bin/mihomo-manager profile update <id> [--via-proxy]
-bin/mihomo-manager settings patch dns-enable true tun-stack gvisor
-bin/mihomo-manager override global get
-bin/mihomo-manager override global set --stdin
-bin/mihomo-manager rule list
-bin/mihomo-manager rule add --domain openai.com --policy proxy
-bin/mihomo-manager policy binding get <profile-id>
-bin/mihomo-manager policy binding set <profile-id> proxy "Proxy group"
-bin/mihomo-manager reconcile
-bin/mihomo-manager doctor
-bin/mihomo-manager doctor tun --stack gvisor
-bin/mihomo-manager doctor fix-tun-permission
+omarchy plugin remove io.github.ZainCheung.mihomo
 ```
 
-All manager mutations use `~/.config/omarchy-mihomo` (or
-`OMARCHY_MIHOMO_HOME`), private directories/files, an exclusive `flock`,
-temporary files, fsync, and atomic rename. Subscription metadata is kept in
-`profiles/<uuid>/meta.json`; `source.yaml` and `override.yaml` are never
-round-trip rewritten. Runtime files are in `runtime/`.
+That disables the widget and deletes the plugin checkout. Language preference
+in `~/.config/omarchy-mihomo/ui` is left in place; delete that file yourself
+if you want it gone.
 
-The compiler's V1 merge rules are recursive map merge, scalar replacement,
-whole-array replacement, and `null` deletion. Global custom rules are stored in
-`custom-rules.json` and prepended to the subscription rules; they never replace
-the subscription's rule array. Proxy rules use a binding stored in
-`profiles/<uuid>/bindings.json`, while Direct and Reject compile to `DIRECT` and
-`REJECT` without a binding. A changed subscription fails safely with
-`binding_required` when its saved proxy group is no longer available.
+## Dependencies
 
-DNS and TUN default to Managed; managed TUN uses the `gvisor` stack by default
-and remains disabled until the user enables it. Managed network settings also
-inject the configured `mixed-port`; System Proxy uses that port exclusively.
-Managed DNS/TUN overlay only
-the fields exposed by the manager and preserve other source/override fields;
-set either management mode to `inherit` to leave that section untouched.
-Managed profiles preserve the running core's `external-controller`, Unix
-controller, `secret`, and `external-ui` fields.
+- `bash` and `curl` (used by `bin/mihomo-ctl` to talk to the core)
+- A running [mihomo](https://github.com/MetaCubeX/mihomo) core with its
+  external controller enabled (the default)
 
-## Advanced control
+The plugin does not install Mihomo. Raw Config mode does not write your yaml;
+managed profiles keep source YAML and generated runtime configuration
+separately. It can switch **system proxy** (desktop + session environment) and
+**TUN** from the Home page. Those two toggles are independent: turning one off
+does not change the other.
 
-The plugin still exposes the full panel for users who need it: proxy groups,
-connections, rules, diagnostics, source/runtime/override inspection, and the
-manager CLI. These are implementation and troubleshooting surfaces, not
-required installation steps.
+## Pages
 
-For existing custom controllers, unusual service layouts, or Geo resource
-failures, see the troubleshooting and implementation notes in
-[`docs/implement.md`](docs/implement.md).
+| Page | What it shows | APIs |
+|------|----------------|------|
+| Home | Current node, system proxy / TUN capture, how to link the core, network overview, proxy mode, traffic | `/version` `/configs` `/proxies` `/traffic` `/memory` plus OS proxy |
+| Profiles | Add or import profiles, switch and update them, and inspect source/runtime/overrides | `mihomo-manager` |
+| Proxies | Proxy groups, expand nodes, switch, group or single-node latency tests | `/proxies` `/proxies/{name}` `/group/{name}/delay` |
+| Config | Hand-written yaml path / stats, reload the core, open the editor; rule providers can be refreshed | `configinfo` `PUT /configs` `/providers/rules` |
+| Connections | Active connections, up/down, chain and matched rule; filter, close one, close all | `/connections` |
+| Rules | Every rule from the config; filter by domain / type / target | `/rules` |
+| Diagnostics | Core setup, TUN/network checks, and recovery hints | `mihomo-manager` / `mihomo-setup` |
 
-## Advanced modes
+Writes (switch node, switch mode, latency test, close connections, update a
+provider, enable TUN) go to the running core. Profile and managed-settings
+writes use `bin/mihomo-manager`, which validates generated configuration before
+applying it. Other front-ends see the same state. System proxy is written to
+the OS, the same way
+[Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) does on
+Linux (`gsettings` / `dconf`), plus the systemd user environment Hyprland
+reads.
 
-**Raw Config Mode** is the legacy-compatible mode. Until a profile is added or
-the current config is imported, the plugin reads the running core and keeps the
-existing runtime TUN controls. System Proxy is available only when the running
-configuration exposes a real `mixed-port` listener.
+## Language
 
-**Managed Profile Mode** treats a subscription as **source configuration, not as
-the final Mihomo runtime configuration**. The manager stores source YAML and
-small overrides separately, compiles them into a runtime YAML, validates it with
-`mihomo -t -f`, then applies it transactionally.
+Default is English. The EN / 中文 switch is in the sidebar footer and on the
+Config page. The choice is stored in `~/.config/omarchy-mihomo/ui` and survives
+restarts:
 
-```text
-Source Config → Global Override → Profile Override → Custom Rules
-              → Managed Network → Managed DNS/TUN → Protected controller fields
-              → validation → runtime/current.yaml
 ```
+language = en
+sysproxy = off
+```
+
+Use `zh` for Chinese. `sysproxy = on` means this plugin last turned the OS
+proxy on, so a mixed-port change can rewrite it.
+
+## Link the core
+
+The panel talks to a running mihomo core directly. In Raw Config mode, run your
+own core, then expose its API. Profile mode can instead use the one-time setup
+action to start a plugin-owned service around an installed binary.
+
+In the core yaml:
+
+```yaml
+external-controller: 127.0.0.1:9090
+# secret: your-secret
+```
+
+**9090** (or whatever you set as `external-controller`) is only for this panel.
+Apps use **mixed-port** or TUN. Home shows the live API, yaml path, and mixed
+port, plus a one-line yaml example.
+
+The panel never hardcodes an address. Every `bin/mihomo-ctl` call probes in
+order and uses the first hit:
+
+1. `~/.config/omarchy-mihomo/config` — manual override
+2. Flags on the running core — `-ext-ctl` / `-ext-ctl-unix` / `-secret`
+3. The yaml that core was started with — `external-controller` / `external-controller-unix` / `secret`
+4. `127.0.0.1:9090`, no secret — mihomo's default
+
+So it finds the core whether it listens on a TCP port or a Unix socket, with or
+without a secret.
+
+If the port or secret is not the default, create
+`~/.config/omarchy-mihomo/config`:
+
+```
+endpoint = 127.0.0.1:9090
+# or a unix socket:
+# socket = /run/mihomo/mihomo.sock
+secret = your-secret
+```
+
+The yaml `secret:` and this file must match. Check what was resolved:
+
+```sh
+~/.config/omarchy/plugins/io.github.ZainCheung.mihomo/bin/mihomo-ctl endpoint
+```
+
+## Keyboard
+
+With the panel open (`Esc` closes, `Tab` moves to the next panel):
+
+| Key | Action |
+|-----|--------|
+| `1` – `6` | Jump to Home / Profiles / Proxies / Connections / Rules / Config |
+| `←` `→` `h` `l` | Previous / next page |
+| `↑` `↓` `j` `k` | Scroll the current page |
+| `/` | Focus the filter (Connections, Rules) |
+| `r` | Refresh the current page |
+
+On the Proxies page, left-click a node to switch, right-click to test that
+node's latency.
+
+## Notes
+
+- On Home, **System proxy** and **TUN** toggle on their own. In managed profile
+  mode, TUN defaults to off and uses `gvisor` when enabled. Off clears both.
+  TUN captures everything; system proxy only the apps that honour it. Ports,
+  LAN and IPv6 stay read-only; edit the yaml and reload for those.
+- System proxy points HTTP/HTTPS/SOCKS at the mixed port and requires a real
+  listener there. It bypasses `localhost`, `127.0.0.1`, RFC1918 ranges and
+  `::1`, matching Clash Verge's Linux default.
+- In Raw Config mode, TUN is `PATCH /configs` with `tun.enable`. The core
+  needs `cap_net_admin` (or to run as root). Managed profile mode checks
+  capability and firewall compatibility in Diagnostics before enabling TUN; the
+  plugin does not install a privileged helper.
+- Only `Selector` groups accept a manual node. `URLTest` / `Fallback` /
+  `LoadBalance` are chosen by the core, and the API rejects a forced pick.
+- In Raw Config mode, the Config page is that handwritten yaml. Nodes live under
+  `proxies:`; there is no subscription fetch on that page. Use Profiles for
+  subscriptions and managed configs. Rule providers can still be refreshed by
+  hand. After you save the file, use **Reload config** — no service restart
+  needed.
+- While the panel is closed it only does a light poll every 30 seconds. Opening
+  it starts the `/traffic` and `/memory` streams and fetches whatever the
+  current page needs.
 
 ## Development
+
+The repo is the source of truth. After an edit:
 
 ```sh
 ./deploy
 cd manager && go test ./...
-./tests/integration.sh
-./tests/bootstrap.sh
-./tests/sysproxy.sh
 ```
 
-The repository is MIT licensed. It does not copy Clash Verge Rev source code;
-its product behavior is only a reference.
+That validates the manifest, syncs to
+`~/.config/omarchy/plugins/io.github.ZainCheung.mihomo/`, and restarts
+the shell. Hot reload is unreliable; a restart is the sure way.
+
+```sh
+omarchy plugin validate .
+omarchy-shell io.github.ZainCheung.mihomo open
+```
